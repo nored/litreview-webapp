@@ -35,21 +35,28 @@ async function refreshSidebarStatus() {
       stage1: status.stage1.done,
       stage2: status.stage2.done,
       stage3: status.stage3.done,
+      stage4: status.stage4?.done,
       stage5: status.stage5.done,
       stage7: status.stage7.done,
     };
     sidebar.querySelectorAll('a[data-stage]').forEach((link) => {
       const key = link.dataset.stage;
-      if (key in map) {
-        link.dataset.status = map[key] ? 'done' : 'pending';
-      } else {
-        link.dataset.status = 'pending';
-      }
+      link.dataset.status = map[key] ? 'done' : 'pending';
     });
   } catch {
     /* ignore status errors */
   }
 }
+
+const TITLES = {
+  '#/setup':  'Setup',
+  '#/stage1': '1. Search',
+  '#/stage2': '2. Triage',
+  '#/stage3': '3. Download',
+  '#/stage4': '4. Deep read',
+  '#/stage5': '5. Synthesis & quality',
+  '#/stage7': '6. Positioning · catalogue',
+};
 
 function activateNav() {
   const route = location.hash || '#/setup';
@@ -79,6 +86,7 @@ async function render() {
 
   viewEl.innerHTML = '';
   viewEl.className = 'view'; // reset any view-specific classes
+  document.title = (TITLES[route] ? TITLES[route] + ' · ' : '') + 'Literature Review Pipeline';
   const result = await handler();
   if (typeof result === 'function') currentCleanup = result;
   refreshSidebarStatus();

@@ -221,7 +221,7 @@ router.get('/api/search/stream', async (req, res) => {
 router.get('/api/status', async (_req, res) => {
   const [
     topicSet, queriesSet, criteriaSet,
-    rawCsv, triagedCsv, downloadLog, gapMatrix, positioning,
+    rawCsv, triagedCsv, downloadLog, gapMatrix, positioning, catalogueMd,
   ] = await Promise.all([
     fileExists(PROTOCOL_FILES.topic),
     fileExists(PROTOCOL_FILES.search_queries),
@@ -231,14 +231,22 @@ router.get('/api/status', async (_req, res) => {
     fileExists(DATA_FILES.download_log),
     fileExists(SYNTHESIS_FILES.gap_matrix),
     fileExists(SYNTHESIS_FILES.positioning_statement),
+    fileExists(path.join(SYNTHESIS_DIR, 'catalogue.md')),
   ]);
+  // Stage 4 done = at least one note exists in notes/
+  let stage4Done = false;
+  try {
+    const files = await fs.readdir(NOTES_DIR);
+    stage4Done = files.some((f) => /^paper_\d+\.md$/.test(f));
+  } catch { /* dir missing */ }
   res.json({
     setup: { topic: topicSet, queries: queriesSet, criteria: criteriaSet },
     stage1: { done: rawCsv, running: !!searchAbort },
     stage2: { done: triagedCsv },
     stage3: { done: downloadLog },
+    stage4: { done: stage4Done },
     stage5: { done: gapMatrix },
-    stage7: { done: positioning },
+    stage7: { done: positioning || catalogueMd },
   });
 });
 
