@@ -1,0 +1,19 @@
+{
+  "name": "litreview-webapp",
+  "version": "0.1.0",
+  "description": "Web app for the thesis literature review pipeline. Local-first, runs on Node.",
+  "type": "module",
+  "main": "server/index.mjs",
+  "scripts": {
+    "start": "node server/index.mjs",
+    "dev": "node --watch server/index.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "fast-xml-parser": "^4.5.0",
+    "yaml": "^2.6.0"
+  }
+}

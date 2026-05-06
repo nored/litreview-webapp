@@ -1,0 +1,24 @@
+# Student project data — NEVER commit. Contains personal notes, credentials,
+# search results, downloaded PDFs, etc.
+project/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Misc
+*.log
+.env
+.env.local

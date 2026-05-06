@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Literature Review Pipeline</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Literature Review Pipeline</div>
+    <div class="topbar-actions">
+      <button id="export-btn" class="btn btn-ghost" disabled title="Coming in phase 7">Export ZIP</button>
+      <!-- AI status pill is mounted here at runtime -->
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav id="sidebar" class="sidebar">
+      <ol class="stages">
+        <li><a href="#/setup" data-stage="setup">Setup</a></li>
+        <li><a href="#/stage1" data-stage="stage1">1. Search</a></li>
+        <li><a href="#/stage2" data-stage="stage2">2. Triage</a></li>
+        <li><a href="#/stage3" data-stage="stage3">3. Download</a></li>
+        <li><a href="#/stage4" data-stage="stage4">4. Deep read</a></li>
+        <li><a href="#/stage5" data-stage="stage5">5. Synthesis &amp; quality</a></li>
+        <li><a href="#/stage7" data-stage="stage7">6. Positioning</a></li>
+      </ol>
+    </nav>
+    <main id="view" class="view"></main>
+  </div>
+
+  <script type="module" src="/app.mjs"></script>
+</body>
+</html>
