@@ -214,7 +214,7 @@ Suggest 7 to 10 categories that the gap matrix at stage 5 should use as row labe
     field('Topic description', [
       descTextarea,
       h('div', { class: 'field-actions' }, [suggestDescription]),
-    ], '3 to 5 sentences. What problem, what angle, what makes it interesting.'),
+    ], '3 to 5 sentences. What problem, what angle, what makes it interesting. This is not just for the README — it is embedded and used downstream: in Stage 1 to score each search query for topic drift (off-topic queries get flagged), in Stage 2 to anchor the pre-filter against your include/exclude prototypes, and in Stage 5 for gap-detection retrieval. Write it like an abstract: concrete vocabulary, not generic phrasing.'),
     field('Topic categories', [
       categoryChips.el,
       categoryHint,
@@ -236,10 +236,117 @@ Suggest 7 to 10 categories that the gap matrix at stage 5 should use as row labe
     ]),
     field('Contact email', [emailInput, emailHint], 'goes into the User-Agent header of every API request'),
     renderCredentialsSection(credsRes),
+    await renderTriageThresholdsSection(),
     h('div', { class: 'form-actions' }, [saveBtn, status]),
   ]);
   root.appendChild(form);
   root.appendChild(renderResetSection());
+}
+
+// Stage 2 embedding pre-filter thresholds. Stored in
+// project/data/_triage_thresholds.json, separate from topic.md so the
+// CLI tool doesn't need to know about them.
+async function renderTriageThresholdsSection() {
+  let current;
+  try {
+    current = await fetch('/api/triage/thresholds').then((r) => r.json());
+  } catch {
+    current = { include_threshold: 0.65, exclude_threshold: 0.65, margin_threshold: 0.10 };
+  }
+
+  const status = h('span', { class: 'hint small' }, ['']);
+
+  function makeSlider(key, min, max, hint) {
+    const valueLabel = h('span', { class: 'mono' }, [Number(current[key]).toFixed(2)]);
+    const slider = h('input', {
+      type: 'range',
+      min: String(min),
+      max: String(max),
+      step: '0.01',
+      value: String(current[key]),
+      style: { width: '180px' },
+    });
+    slider.addEventListener('input', () => {
+      current[key] = Number(slider.value);
+      valueLabel.textContent = Number(slider.value).toFixed(2);
+      status.className = 'hint small';
+      status.textContent = '';
+    });
+    return h('div', { class: 'threshold-row' }, [
+      h('div', { class: 'threshold-row-head' }, [
+        h('span', { class: 'threshold-label' }, [keyLabel(key)]),
+        slider,
+        valueLabel,
+      ]),
+      h('span', { class: 'hint small' }, [hint]),
+    ]);
+  }
+
+  const incRow = makeSlider(
+    'include_threshold', 0.50, 0.95,
+    'Minimum cosine to the include prototype required to auto-include.',
+  );
+  const excRow = makeSlider(
+    'exclude_threshold', 0.50, 0.95,
+    'Minimum cosine to the exclude prototype required to auto-exclude.',
+  );
+  const marRow = makeSlider(
+    'margin_threshold', 0.00, 0.40,
+    'How much closer to the winning prototype the candidate must be. Filters out "this paper is on-topic for both" cases.',
+  );
+
+  const saveBtn = h('button', { class: 'btn btn-primary', type: 'button' }, ['Save thresholds']);
+  saveBtn.addEventListener('click', async () => {
+    try {
+      saveBtn.disabled = true;
+      const r = await fetch('/api/triage/thresholds', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(current),
+      }).then((res) => res.json());
+      if (r.error) throw new Error(r.error);
+      status.className = 'hint hint-good small';
+      status.textContent = 'saved';
+    } catch (err) {
+      status.className = 'hint hint-warn small';
+      status.textContent = 'save failed: ' + err.message;
+    } finally {
+      saveBtn.disabled = false;
+    }
+  });
+
+  const resetBtn = h('button', { class: 'btn btn-ghost', type: 'button' }, ['Reset to defaults']);
+  resetBtn.addEventListener('click', async () => {
+    current = { include_threshold: 0.65, exclude_threshold: 0.65, margin_threshold: 0.10 };
+    // Re-render the inputs so the user sees the change. Cheapest route:
+    // re-fire the input events on each slider.
+    const sliders = wrapper.querySelectorAll('input[type=range]');
+    sliders[0].value = '0.65';
+    sliders[1].value = '0.65';
+    sliders[2].value = '0.10';
+    sliders.forEach((s) => s.dispatchEvent(new Event('input')));
+  });
+
+  const wrapper = h('fieldset', { class: 'field' }, [
+    h('legend', {}, ['Triage pre-filter thresholds']),
+    h('p', { class: 'hint' }, [
+      'Embedding pre-filter scores pending papers against your include/exclude prototype centroids in Stage 2. ',
+      'Cosine scores in same-genre English text live roughly in 0.4–0.95; the noise floor is ~0.55, so values below 0.65 are unreliable as decision floors.',
+    ]),
+    incRow,
+    excRow,
+    marRow,
+    h('div', { class: 'form-actions' }, [saveBtn, resetBtn, status]),
+  ]);
+  return wrapper;
+}
+
+function keyLabel(key) {
+  return ({
+    include_threshold: 'Include floor',
+    exclude_threshold: 'Exclude floor',
+    margin_threshold: 'Margin',
+  })[key] || key;
 }
 
 function renderResetSection() {

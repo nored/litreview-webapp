@@ -9,6 +9,8 @@ import { ensureDir } from '../storage.mjs';
 const JOBS_DIR = path.join(DATA_DIR, '_jobs');
 const SEARCH_JOB_FILE = path.join(JOBS_DIR, 'search.json');
 const DOWNLOAD_JOB_FILE = path.join(JOBS_DIR, 'download.json');
+const EMBED_JOB_FILE = path.join(JOBS_DIR, 'embed.json');
+const SNOWBALL_JOB_FILE = path.join(JOBS_DIR, 'snowball.json');
 
 export async function readSearchJob() {
   try {
@@ -56,6 +58,86 @@ export async function clearDownloadJob() {
   }
 }
 
+export async function readEmbedJob() {
+  try {
+    const text = await fs.readFile(EMBED_JOB_FILE, 'utf8');
+    return JSON.parse(text);
+  } catch (err) {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+export async function writeEmbedJob(job) {
+  await ensureDir(JOBS_DIR);
+  await fs.writeFile(EMBED_JOB_FILE, JSON.stringify(job, null, 2), 'utf8');
+}
+
+export async function clearEmbedJob() {
+  try {
+    await fs.unlink(EMBED_JOB_FILE);
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+}
+
+export async function readSnowballJob() {
+  try {
+    const text = await fs.readFile(SNOWBALL_JOB_FILE, 'utf8');
+    return JSON.parse(text);
+  } catch (err) {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+export async function writeSnowballJob(job) {
+  await ensureDir(JOBS_DIR);
+  await fs.writeFile(SNOWBALL_JOB_FILE, JSON.stringify(job, null, 2), 'utf8');
+}
+
+export async function clearSnowballJob() {
+  try {
+    await fs.unlink(SNOWBALL_JOB_FILE);
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+}
+
+export function newSnowballJob({ direction = 'backward', sources_total = 0 } = {}) {
+  return {
+    id: 'sb_' + Date.now().toString(36),
+    status: 'running',
+    direction,
+    started_at: new Date().toISOString(),
+    finished_at: null,
+    interrupted_at: null,
+    interrupted_reason: null,
+    sources_total,
+    sources_done: 0,
+    candidates_fetched: 0,
+    new_added: 0,
+    dropped_dup: 0,
+    include_forward: direction === 'forward' || direction === 'both',
+    last_error: null,
+  };
+}
+
+export function newEmbedJob() {
+  return {
+    id: 'e_' + Date.now().toString(36),
+    status: 'idle',         // 'idle' | 'running' | 'paused' | 'completed' | 'interrupted'
+    started_at: new Date().toISOString(),
+    finished_at: null,
+    interrupted_at: null,
+    interrupted_reason: null,
+    papers_embedded: 0,
+    notes_embedded: 0,
+    chunks_embedded: 0,
+    last_error: null,
+  };
+}
+
 export function newDownloadJob() {
   return {
     id: 'd_' + Date.now().toString(36),
@@ -86,6 +168,22 @@ export async function reconcileJobsOnStartup() {
     dj.interrupted_reason = 'server restarted before download completed';
     await writeDownloadJob(dj);
     console.log('reconciled interrupted download job');
+  }
+  const ej = await readEmbedJob();
+  if (ej?.status === 'running') {
+    ej.status = 'interrupted';
+    ej.interrupted_at = new Date().toISOString();
+    ej.interrupted_reason = 'server restarted before embedding completed';
+    await writeEmbedJob(ej);
+    console.log('reconciled interrupted embed job');
+  }
+  const sbj = await readSnowballJob();
+  if (sbj?.status === 'running') {
+    sbj.status = 'interrupted';
+    sbj.interrupted_at = new Date().toISOString();
+    sbj.interrupted_reason = 'server restarted before snowballing completed';
+    await writeSnowballJob(sbj);
+    console.log('reconciled interrupted snowball job');
   }
 }
 

@@ -37,6 +37,12 @@ export async function renderStage1(root) {
   let progressStepEl = null;
   let counts = { arxiv: 0, openalex: 0, semantic_scholar: 0, errors: 0 };
 
+  // Topic-drift guard: each query's cosine similarity to the topic
+  // embedding. Populated lazily when the student clicks "Score" or after
+  // an AI suggestion lands. null = not scored yet.
+  const driftScores = new Map();
+  let driftScoring = false;
+
   function markDirty() {
     if (!dirty) {
       dirty = true;
@@ -59,7 +65,13 @@ export async function renderStage1(root) {
         class: 'query-input' + (looksSlug ? ' query-input-warn' : ''),
         title: looksSlug ? 'looks like a slug. arXiv treats this as one keyword. Click clean to fix.' : '',
       });
-      input.addEventListener('input', () => { queries[i] = input.value; markDirty(); });
+      input.addEventListener('input', () => {
+        queries[i] = input.value;
+        // Editing a query invalidates its drift score; rest stay valid.
+        driftScores.delete(q);
+        driftScores.delete(input.value);
+        markDirty();
+      });
       const remove = h('button', { class: 'btn btn-ghost', type: 'button', title: 'remove' }, ['×']);
       remove.addEventListener('click', () => {
         queries.splice(i, 1);
@@ -68,7 +80,9 @@ export async function renderStage1(root) {
       });
       queryListEl.appendChild(h('div', { class: 'query-row' }, [
         h('span', { class: 'query-num' }, [String(i + 1)]),
-        input, remove,
+        input,
+        renderDriftBadge(q),
+        remove,
       ]));
     });
     // Surface a small action row only when there's something to act on.
@@ -86,12 +100,25 @@ export async function renderStage1(root) {
         });
         actions.appendChild(cleanBtn);
       }
+      // Topic-drift score button. Embeds each query and compares against
+      // the topic embedding so the student can spot off-topic drift before
+      // the search runs and pollutes candidates_raw.csv.
+      if (queries.length > 0) {
+        const scoreBtn = h('button', {
+          class: 'btn', type: 'button',
+          disabled: driftScoring,
+          title: 'Score each query’s topic alignment using embeddings',
+        }, [driftScoring ? 'Scoring…' : 'Score against topic']);
+        scoreBtn.addEventListener('click', () => scoreQueriesNow());
+        actions.appendChild(scoreBtn);
+      }
       const clearAll = h('button', {
         class: 'btn btn-ghost', type: 'button',
       }, ['Clear all']);
       clearAll.addEventListener('click', () => {
         if (queries.length && !confirm(`Remove all ${queries.length} queries?`)) return;
         queries = [];
+        driftScores.clear();
         markDirty();
         renderQueries();
       });
@@ -115,6 +142,47 @@ export async function renderStage1(root) {
       }
     });
     queryListEl.appendChild(addInput);
+  }
+
+  function renderDriftBadge(query) {
+    const q = (query || '').trim();
+    if (!q) return null;
+    if (!driftScores.has(q)) return null;
+    const s = driftScores.get(q);
+    if (s == null) return null;
+    // Colour bins map to bge-small's empirical ranges for same-genre English.
+    let cls = 'drift-warn';
+    if (s >= 0.65) cls = 'drift-good';
+    else if (s >= 0.45) cls = 'drift-mid';
+    return h('span', {
+      class: 'drift-badge ' + cls,
+      title: `topic alignment ${s.toFixed(3)} (>=0.65 strong, 0.45–0.65 moderate, <0.45 likely off-topic)`,
+    }, [s.toFixed(2)]);
+  }
+
+  async function scoreQueriesNow() {
+    if (driftScoring) return;
+    const list = queries.map((q) => String(q || '').trim()).filter(Boolean);
+    if (list.length === 0) return;
+    driftScoring = true;
+    renderQueries();
+    try {
+      const r = await fetch('/api/search/score-queries', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ queries: list }),
+      }).then((res) => res.json());
+      if (r.error) throw new Error(r.error);
+      for (const item of r.scored || []) {
+        if (item.drift_score != null) driftScores.set(item.query, item.drift_score);
+      }
+    } catch (err) {
+      console.error('drift scoring failed:', err);
+      // Soft-fail: leave existing scores in place.
+    } finally {
+      driftScoring = false;
+      renderQueries();
+    }
   }
 
   function renderManual() {
@@ -505,6 +573,9 @@ Example of unacceptable: machine-learning-code-review`;
       queries = next;
       markDirty();
       renderQueries();
+      // Score the suggestions against the topic so the student sees which
+      // ones are tightly aligned vs drifting.
+      scoreQueriesNow();
     },
   });
 
@@ -545,9 +616,127 @@ Example of unacceptable: machine-learning-code-review`;
     summaryEl,
   ]));
 
+  // Semantic near-duplicate detection over candidates_raw.csv via the
+  // papers vector store. Surfaces preprint-vs-published collisions and
+  // multi-source duplicates the title/DOI dedup misses. Marking one as
+  // exclude (rather than deleting) keeps row_index references stable.
+  const dedupPanel = renderDedupPanel();
+  root.appendChild(dedupPanel);
+
   renderQueries();
   renderManual();
   refreshBanner();
+}
+
+function renderDedupPanel() {
+  const listEl = h('div', { class: 'dedup-list' });
+  const status = h('span', { class: 'muted small' }, ['']);
+  let scanning = false;
+  let pairs = [];
+
+  async function scan() {
+    if (scanning) return;
+    scanning = true;
+    render();
+    try {
+      const r = await fetch('/api/search/near-duplicates?threshold=0.92').then((res) => res.json());
+      if (r.error) throw new Error(r.error);
+      pairs = r.pairs || [];
+      status.className = 'muted small';
+      status.textContent = pairs.length === 0
+        ? 'No near-duplicate pairs above 0.92. Either your dedup is clean or the search hasn’t produced enough overlap to find them.'
+        : `${pairs.length} candidate pair${pairs.length === 1 ? '' : 's'} (cosine ≥ 0.92).`;
+    } catch (err) {
+      status.className = 'hint hint-warn small';
+      status.textContent = 'scan failed: ' + err.message;
+    } finally {
+      scanning = false;
+      render();
+    }
+  }
+
+  async function resolve(keep, drop) {
+    try {
+      const r = await fetch('/api/search/resolve-duplicate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keep_row_index: keep, drop_row_index: drop }),
+      }).then((res) => res.json());
+      if (r.error) throw new Error(r.error);
+      // Drop the resolved pair from local state and re-render.
+      pairs = pairs.filter((p) => !(
+        (p.a.row_index === keep && p.b.row_index === drop) ||
+        (p.a.row_index === drop && p.b.row_index === keep)
+      ));
+      render();
+    } catch (err) {
+      alert('Resolve failed: ' + err.message);
+    }
+  }
+
+  function paperLabel(p) {
+    const bits = [p.title || '(untitled)'];
+    if (p.year) bits.push(`(${p.year})`);
+    if (p.venue) bits.push(`· ${p.venue.slice(0, 40)}`);
+    return bits.join(' ');
+  }
+
+  function render() {
+    listEl.innerHTML = '';
+    if (scanning) {
+      listEl.appendChild(h('p', { class: 'muted small' }, ['scanning the papers store…']));
+      return;
+    }
+    if (!pairs.length) return;
+    for (const p of pairs) {
+      const row = h('div', { class: 'dedup-row card' }, [
+        h('div', { class: 'dedup-score muted small' }, [`cosine ${p.score.toFixed(3)}`]),
+        h('div', { class: 'dedup-pair' }, [
+          h('div', { class: 'dedup-cell' }, [
+            h('div', { class: 'dedup-title' }, [paperLabel(p.a)]),
+            p.a.doi ? h('div', { class: 'muted small mono' }, [p.a.doi]) : null,
+            h('div', { class: 'dedup-meta muted small' }, [
+              `row ${p.a.row_index}`,
+              p.a.triage_label ? ` · ${p.a.triage_label}` : ' · pending',
+            ]),
+            h('button', {
+              class: 'btn btn-ghost btn-sm', type: 'button',
+              onclick: () => resolve(p.a.row_index, p.b.row_index),
+            }, ['Keep this, drop the other']),
+          ]),
+          h('div', { class: 'dedup-cell' }, [
+            h('div', { class: 'dedup-title' }, [paperLabel(p.b)]),
+            p.b.doi ? h('div', { class: 'muted small mono' }, [p.b.doi]) : null,
+            h('div', { class: 'dedup-meta muted small' }, [
+              `row ${p.b.row_index}`,
+              p.b.triage_label ? ` · ${p.b.triage_label}` : ' · pending',
+            ]),
+            h('button', {
+              class: 'btn btn-ghost btn-sm', type: 'button',
+              onclick: () => resolve(p.b.row_index, p.a.row_index),
+            }, ['Keep this, drop the other']),
+          ]),
+        ]),
+      ]);
+      listEl.appendChild(row);
+    }
+  }
+
+  const scanBtn = h('button', { class: 'btn', type: 'button' }, ['Find near-duplicates']);
+  scanBtn.addEventListener('click', () => scan());
+
+  return h('section', { class: 'panel' }, [
+    h('div', { class: 'panel-header' }, [
+      h('h2', {}, ['Near-duplicates']),
+      h('div', { class: 'panel-actions' }, [scanBtn, status]),
+    ]),
+    h('p', { class: 'small muted' }, [
+      'Embedding-based scan over the papers store. Surfaces preprint-vs-published collisions and multi-source duplicates that title/DOI dedup misses. Resolving marks one row as ',
+      h('em', {}, ['exclude']),
+      ' with reason "near-duplicate of row N" — paper_id assignments stay stable.',
+    ]),
+    listEl,
+  ]);
 }
 
 function escapeHtml(s) {

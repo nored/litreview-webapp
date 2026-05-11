@@ -7,6 +7,7 @@ import { renderStage3 } from './views/stage3.mjs';
 import { renderStage4 } from './views/stage4.mjs';
 import { renderStage5 } from './views/stage5.mjs';
 import { renderStage7 } from './views/stage7.mjs';
+import { renderStage8 } from './views/stage8.mjs';
 import { renderPlaceholder } from './views/placeholder.mjs';
 import { mountAiStatus } from './components/ai_status.mjs';
 
@@ -19,6 +20,7 @@ const ROUTES = {
   '#/stage5': () => renderStage5(viewEl),
   '#/stage6': () => { location.hash = '#/stage5'; return null; },
   '#/stage7': () => renderStage7(viewEl),
+  '#/stage8': () => renderStage8(viewEl),
 };
 
 const viewEl = document.getElementById('view');
@@ -54,8 +56,9 @@ const TITLES = {
   '#/stage2': '2. Triage',
   '#/stage3': '3. Download',
   '#/stage4': '4. Deep read',
-  '#/stage5': '5. Synthesis & quality',
-  '#/stage7': '6. Positioning · catalogue',
+  '#/stage5': '5. Corpus shape',
+  '#/stage7': '6. Positioning & catalogue',
+  '#/stage8': '7. Loop close',
 };
 
 function activateNav() {

@@ -166,16 +166,46 @@ export function mountAiStatus(rootEl) {
     const cfg = llm.getRemoteConfig().openai;
 
     wrap.appendChild(h('p', { class: 'muted small' }, [
-      'Works with OpenAI, Ollama, OpenRouter, vLLM, Groq, Together, LM Studio, llama.cpp server. ',
-      'API key (if any) and base URL are stored at ',
-      h('code', {}, ['data/_credentials.json']),
-      ' on this machine; never sent anywhere except the configured endpoint.',
+      'API key and base URL are stored at ',
+      h('code', {}, ['project/data/_credentials.json']),
+      ' on this machine; never sent anywhere except the endpoint below.',
     ]));
 
-    const baseUrlInput = h('input', { type: 'text', value: cfg.base_url || '', placeholder: 'https://api.openai.com/v1   (or http://localhost:11434/v1 for Ollama)' });
-    const apiKeyInput  = h('input', { type: 'password', autocomplete: 'new-password', placeholder: cfg.configured ? '(set; type to replace)' : 'sk-… or empty for Ollama' });
-    const modelInput   = h('input', { type: 'text', value: cfg.model || '', placeholder: 'e.g. gpt-4o-mini, llama3.2:3b, qwen2.5:7b' });
+    const baseUrlInput = h('input', { type: 'text', value: cfg.base_url || '', placeholder: 'https://api.openai.com/v1' });
+    const apiKeyInput  = h('input', { type: 'password', autocomplete: 'new-password', placeholder: cfg.configured ? '(set; type to replace)' : 'sk-… (or leave empty for local servers)' });
+    const modelInput   = h('input', { type: 'text', value: cfg.model || '', placeholder: 'e.g. gpt-4o-mini' });
     const status       = h('span', { class: 'small' });
+
+    // Preset chip row + per-preset instructions, embedded directly in the
+    // configuration panel so the student sees the exact install steps and
+    // the right base URL at the moment they're about to fill the form.
+    const presetsRow = h('div', { class: 'provider-presets' });
+    const instructionsBox = h('div', { class: 'provider-instructions' });
+
+    let activePreset = detectPreset(cfg.base_url || '');
+
+    function pickPreset(id) {
+      activePreset = id;
+      const p = PRESETS_OPENAI[id];
+      if (p?.baseUrl) baseUrlInput.value = p.baseUrl;
+      renderPresets();
+    }
+
+    function renderPresets() {
+      presetsRow.innerHTML = '';
+      presetsRow.appendChild(h('span', { class: 'small muted' }, ['Configure for:']));
+      for (const [id, p] of Object.entries(PRESETS_OPENAI)) {
+        presetsRow.appendChild(h('button', {
+          type: 'button',
+          class: 'preset-chip' + (activePreset === id ? ' active' : ''),
+          onclick: () => pickPreset(id),
+        }, [p.label]));
+      }
+      instructionsBox.innerHTML = '';
+      const p = PRESETS_OPENAI[activePreset];
+      if (p?.render) instructionsBox.appendChild(p.render());
+    }
+    renderPresets();
 
     async function save() {
       status.textContent = 'saving…'; status.className = 'small muted';
@@ -218,9 +248,11 @@ export function mountAiStatus(rootEl) {
       }
     }
 
-    wrap.appendChild(field('Base URL', baseUrlInput, 'OpenAI default: https://api.openai.com/v1 · Ollama: http://localhost:11434/v1'));
-    wrap.appendChild(field('API key',  apiKeyInput,  'Leave blank for keyless endpoints (Ollama, vLLM with no auth)'));
-    wrap.appendChild(field('Model',    modelInput,   'For Ollama, pull the model first: `ollama pull llama3.2:3b`'));
+    wrap.appendChild(presetsRow);
+    wrap.appendChild(instructionsBox);
+    wrap.appendChild(field('Base URL', baseUrlInput, ''));
+    wrap.appendChild(field('API key',  apiKeyInput,  ''));
+    wrap.appendChild(field('Model',    modelInput,   ''));
     wrap.appendChild(h('div', { class: 'inline-row' }, [
       h('button', { class: 'btn btn-primary', onclick: save }, ['Save']),
       h('button', { class: 'btn', onclick: probe }, ['Test connection']),
@@ -234,14 +266,34 @@ export function mountAiStatus(rootEl) {
     const wrap = h('div', { class: 'provider-panel' });
     const cfg = llm.getRemoteConfig().anthropic;
 
-    wrap.appendChild(h('p', { class: 'muted small' }, [
-      'Anthropic Claude API, proxied through this local server so the API key stays in ',
-      h('code', {}, ['data/_credentials.json']),
-      '. Never sent anywhere except api.anthropic.com.',
+    wrap.appendChild(h('div', { class: 'provider-instructions' }, [
+      h('h4', {}, ['Setup']),
+      h('ol', {}, [
+        h('li', {}, [
+          'Get an API key at ',
+          h('a', { href: 'https://console.anthropic.com/settings/keys', target: '_blank', rel: 'noopener' }, ['console.anthropic.com/settings/keys']),
+          '. Starts with ', h('code', {}, ['sk-ant-']), '.',
+        ]),
+        h('li', {}, ['Paste it into the API key field below.']),
+        h('li', {}, [
+          'Pick a model — recommended values:',
+          h('ul', {}, [
+            h('li', {}, [h('code', {}, ['claude-haiku-4-5']), ' — cheap and fast, fine for triage and search-query suggestions.']),
+            h('li', {}, [h('code', {}, ['claude-sonnet-4-6']), ' — balanced. Good default for note drafting.']),
+            h('li', {}, [h('code', {}, ['claude-opus-4-7']), ' — best reasoning, use for synthesis and catalogue.']),
+          ]),
+        ]),
+        h('li', {}, ['Click Save.']),
+      ]),
+      h('p', { class: 'muted small' }, [
+        'The key never leaves your machine; it\'s stored at ',
+        h('code', {}, ['project/data/_credentials.json']),
+        ' (file mode 0600) and used only by the local server to talk to api.anthropic.com.',
+      ]),
     ]));
 
     const apiKeyInput = h('input', { type: 'password', autocomplete: 'new-password', placeholder: cfg.configured ? '(set; type to replace)' : 'sk-ant-…' });
-    const modelInput  = h('input', { type: 'text', value: cfg.model || '', placeholder: 'e.g. claude-haiku-4-5, claude-sonnet-4-5' });
+    const modelInput  = h('input', { type: 'text', value: cfg.model || '', placeholder: 'claude-haiku-4-5' });
     const status      = h('span', { class: 'small' });
 
     async function save() {
@@ -265,7 +317,7 @@ export function mountAiStatus(rootEl) {
     }
 
     wrap.appendChild(field('API key', apiKeyInput, ''));
-    wrap.appendChild(field('Model',   modelInput,  'Recommended: claude-haiku-4-5 (fast, cheap) or claude-sonnet-4-5 (better quality)'));
+    wrap.appendChild(field('Model',   modelInput,  ''));
     wrap.appendChild(h('div', { class: 'inline-row' }, [
       h('button', { class: 'btn btn-primary', onclick: save }, ['Save']),
       status,
@@ -280,4 +332,187 @@ export function mountAiStatus(rootEl) {
       hint ? h('span', { class: 'hint small' }, [hint]) : null,
     ]);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Provider presets for the OpenAI-compatible panel. Each entry knows the
+// preset's base URL (auto-filled into the form) and an instructions render
+// fn that shows the exact install steps + what to put in API key / Model.
+// ---------------------------------------------------------------------------
+
+const PRESETS_OPENAI = {
+  ollama: {
+    label: 'Ollama',
+    baseUrl: 'http://localhost:11434/v1',
+    render: () => instructionsCard('Ollama (local server, GPU-accelerated, free)', [
+      ['Install:'],
+      ['code-block', [
+        '# macOS',
+        'brew install ollama',
+        '',
+        '# Linux',
+        'curl -fsSL https://ollama.com/install.sh | sh',
+        '',
+        '# Windows',
+        '# download installer from https://ollama.com',
+      ].join('\n')],
+      ['Pull a model (one of):'],
+      ['code-block', [
+        'ollama pull llama3.1:8b      # 4.7 GB, very capable',
+        'ollama pull qwen2.5:14b      # 9 GB, strong reasoning',
+        'ollama pull mistral:7b       # 4.1 GB, fast',
+        'ollama pull phi3:14b         # 7.9 GB',
+      ].join('\n')],
+      ['Then in the form below:'],
+      ['kv', 'Base URL', 'http://localhost:11434/v1 (filled in)'],
+      ['kv', 'API key', 'leave empty'],
+      ['kv', 'Model', 'the id you pulled, e.g. llama3.1:8b'],
+      ['Click Save, then Test connection — should say "endpoint healthy" with your pulled models listed.'],
+    ]),
+  },
+  openai: {
+    label: 'OpenAI',
+    baseUrl: 'https://api.openai.com/v1',
+    render: () => instructionsCard('OpenAI', [
+      ['Get an API key at ', linkOut('platform.openai.com/api-keys', 'https://platform.openai.com/api-keys'), '. Starts with ', ['code', 'sk-'], '.'],
+      ['Then in the form below:'],
+      ['kv', 'Base URL', 'https://api.openai.com/v1 (filled in)'],
+      ['kv', 'API key', 'your sk-… key'],
+      ['kv', 'Model', 'gpt-4o-mini (cheap), gpt-4o (better), o1-mini (reasoning)'],
+    ]),
+  },
+  openrouter: {
+    label: 'OpenRouter',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    render: () => instructionsCard('OpenRouter (one key, many providers)', [
+      ['Get an API key at ', linkOut('openrouter.ai/keys', 'https://openrouter.ai/keys'), '. Starts with ', ['code', 'sk-or-'], '.'],
+      ['Then in the form below:'],
+      ['kv', 'Base URL', 'https://openrouter.ai/api/v1 (filled in)'],
+      ['kv', 'API key', 'your sk-or-… key'],
+      ['kv', 'Model', 'vendor/model format, e.g. anthropic/claude-haiku-4-5, meta-llama/llama-3.3-70b-instruct, google/gemini-2.0-flash-exp, mistralai/mistral-large'],
+      ['Browse models and pricing: ', linkOut('openrouter.ai/models', 'https://openrouter.ai/models')],
+    ]),
+  },
+  groq: {
+    label: 'Groq',
+    baseUrl: 'https://api.groq.com/openai/v1',
+    render: () => instructionsCard('Groq (very fast open-weight inference, free tier)', [
+      ['Get an API key at ', linkOut('console.groq.com/keys', 'https://console.groq.com/keys'), '. Starts with ', ['code', 'gsk_'], '.'],
+      ['Then in the form below:'],
+      ['kv', 'Base URL', 'https://api.groq.com/openai/v1 (filled in)'],
+      ['kv', 'API key', 'your gsk_… key'],
+      ['kv', 'Model', 'llama-3.3-70b-versatile, mixtral-8x7b-32768, or gemma2-9b-it'],
+    ]),
+  },
+  together: {
+    label: 'Together',
+    baseUrl: 'https://api.together.xyz/v1',
+    render: () => instructionsCard('Together AI', [
+      ['Get an API key at ', linkOut('api.together.xyz/settings/api-keys', 'https://api.together.xyz/settings/api-keys'), '.'],
+      ['Then in the form below:'],
+      ['kv', 'Base URL', 'https://api.together.xyz/v1 (filled in)'],
+      ['kv', 'API key', 'your Together key'],
+      ['kv', 'Model', 'e.g. meta-llama/Llama-3.3-70B-Instruct-Turbo, mistralai/Mixtral-8x22B-Instruct-v0.1'],
+    ]),
+  },
+  lmstudio: {
+    label: 'LM Studio',
+    baseUrl: 'http://localhost:1234/v1',
+    render: () => instructionsCard('LM Studio (local GUI for models)', [
+      ['Download from ', linkOut('lmstudio.ai', 'https://lmstudio.ai'), '. Cross-platform.'],
+      ['In LM Studio: search for a model in the Discover tab, click Download. Any GGUF works.'],
+      ['Open the Developer tab and click Start Server. Default port is 1234.'],
+      ['Then in the form below:'],
+      ['kv', 'Base URL', 'http://localhost:1234/v1 (filled in)'],
+      ['kv', 'API key', 'leave empty'],
+      ['kv', 'Model', 'any string — LM Studio serves one model at a time'],
+    ]),
+  },
+  vllm: {
+    label: 'vLLM',
+    baseUrl: 'http://localhost:8000/v1',
+    render: () => instructionsCard('vLLM (self-hosted high-throughput inference)', [
+      ['Install and run:'],
+      ['code-block', [
+        'pip install vllm',
+        'vllm serve meta-llama/Llama-3.1-8B-Instruct --port 8000',
+      ].join('\n')],
+      ['Then in the form below:'],
+      ['kv', 'Base URL', 'http://localhost:8000/v1 (filled in; replace localhost if running on another host)'],
+      ['kv', 'API key', 'leave empty (unless you put auth in front)'],
+      ['kv', 'Model', 'the model id you passed to vllm serve, e.g. meta-llama/Llama-3.1-8B-Instruct'],
+    ]),
+  },
+  llamacpp: {
+    label: 'llama.cpp',
+    baseUrl: 'http://localhost:8080/v1',
+    render: () => instructionsCard('llama.cpp server (bare-metal local)', [
+      ['Build and run:'],
+      ['code-block', [
+        'git clone https://github.com/ggerganov/llama.cpp',
+        'cd llama.cpp && make',
+        './server -m /path/to/model.gguf -c 4096 --port 8080',
+      ].join('\n')],
+      ['Then in the form below:'],
+      ['kv', 'Base URL', 'http://localhost:8080/v1 (filled in)'],
+      ['kv', 'API key', 'leave empty'],
+      ['kv', 'Model', 'any string — only one model loaded at a time'],
+    ]),
+  },
+};
+
+// Guess which preset matches an already-saved base URL so the chip
+// highlights the right one when the modal re-opens.
+function detectPreset(baseUrl) {
+  if (!baseUrl) return 'ollama';
+  for (const [id, p] of Object.entries(PRESETS_OPENAI)) {
+    if (p.baseUrl === baseUrl) return id;
+  }
+  // Heuristic fallbacks for partial matches.
+  if (/openai\.com/i.test(baseUrl)) return 'openai';
+  if (/openrouter/i.test(baseUrl)) return 'openrouter';
+  if (/groq/i.test(baseUrl)) return 'groq';
+  if (/together/i.test(baseUrl)) return 'together';
+  if (/:11434/.test(baseUrl)) return 'ollama';
+  if (/:1234/.test(baseUrl)) return 'lmstudio';
+  if (/:8000/.test(baseUrl)) return 'vllm';
+  if (/:8080/.test(baseUrl)) return 'llamacpp';
+  return 'openai';
+}
+
+// Build an instructions card from a compact spec. Each item is either:
+//   - string                            → a paragraph
+//   - ['code-block', text]              → a fenced code block
+//   - ['kv', label, value]              → a key/value row
+//   - ['code', text]                    → inline code
+//   - array of nested specs/strings     → paragraph with mixed content
+function instructionsCard(title, items) {
+  const children = [h('h4', {}, [title])];
+  for (const item of items) {
+    children.push(renderSpec(item));
+  }
+  return h('div', { class: 'instructions-card' }, children);
+}
+
+function renderSpec(item) {
+  if (typeof item === 'string') return h('p', {}, [item]);
+  if (!Array.isArray(item)) return item; // already an h() node
+  if (item[0] === 'code-block') {
+    return h('pre', { class: 'code-block' }, [h('code', {}, [item[1]])]);
+  }
+  if (item[0] === 'code') {
+    return h('code', {}, [item[1]]);
+  }
+  if (item[0] === 'kv') {
+    return h('div', { class: 'kv-row' }, [
+      h('span', { class: 'kv-label' }, [item[1]]),
+      h('span', { class: 'kv-value' }, [item[2]]),
+    ]);
+  }
+  // Mixed inline content
+  return h('p', {}, item.map(renderSpec));
+}
+
+function linkOut(label, href) {
+  return h('a', { href, target: '_blank', rel: 'noopener' }, [label]);
 }
