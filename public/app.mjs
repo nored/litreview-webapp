@@ -1,5 +1,15 @@
 // Tiny client-side router and view harness.
+//
+// Default mode is "the conveyor" — the home route `#/` renders a guided
+// thread that decides what the user should do next. Sidebar is hidden.
+//
+// Legacy mode is opt-in via the topbar "Advanced view" toggle, which
+// flips a localStorage flag (`litreview.advanced = '1'`). When set, the
+// sidebar reappears with all seven stage links and bookmarkable stage
+// URLs continue to work as before. Both modes can use the same stage
+// view code; only the chrome changes.
 
+import { renderConveyor } from './views/conveyor.mjs';
 import { renderSetup } from './views/setup.mjs';
 import { renderStage1 } from './views/stage1.mjs';
 import { renderStage2 } from './views/stage2.mjs';
@@ -8,11 +18,11 @@ import { renderStage4 } from './views/stage4.mjs';
 import { renderStage5 } from './views/stage5.mjs';
 import { renderStage7 } from './views/stage7.mjs';
 import { renderStage8 } from './views/stage8.mjs';
-import { renderPlaceholder } from './views/placeholder.mjs';
 import { mountAiStatus } from './components/ai_status.mjs';
 
 const ROUTES = {
-  '#/setup': () => renderSetup(viewEl),
+  '#/':       () => renderConveyor(viewEl),
+  '#/setup':  () => renderSetup(viewEl),
   '#/stage1': () => renderStage1(viewEl),
   '#/stage2': () => renderStage2(viewEl),
   '#/stage3': () => renderStage3(viewEl),
@@ -26,7 +36,30 @@ const ROUTES = {
 const viewEl = document.getElementById('view');
 const sidebar = document.getElementById('sidebar');
 
+const LS_ADVANCED = 'litreview.advanced';
+
+function isAdvancedMode() {
+  try { return localStorage.getItem(LS_ADVANCED) === '1'; } catch { return false; }
+}
+function setAdvancedMode(on) {
+  try {
+    if (on) localStorage.setItem(LS_ADVANCED, '1');
+    else localStorage.removeItem(LS_ADVANCED);
+  } catch { /* ignore */ }
+  applyAdvancedMode();
+}
+
+// Show/hide the sidebar based on mode. In conveyor mode the sidebar
+// disappears entirely; the view fills the available space. In advanced
+// mode it returns with the seven stage links.
+function applyAdvancedMode() {
+  const advanced = isAdvancedMode();
+  document.body.classList.toggle('mode-advanced', advanced);
+  document.body.classList.toggle('mode-conveyor', !advanced);
+}
+
 async function refreshSidebarStatus() {
+  if (!isAdvancedMode()) return;  // sidebar is hidden anyway
   try {
     const res = await fetch('/api/status');
     if (!res.ok) return;
@@ -51,6 +84,7 @@ async function refreshSidebarStatus() {
 }
 
 const TITLES = {
+  '#/':       'Literature review',
   '#/setup':  'Setup',
   '#/stage1': '1. Search',
   '#/stage2': '2. Triage',
@@ -62,25 +96,22 @@ const TITLES = {
 };
 
 function activateNav() {
-  const route = location.hash || '#/setup';
+  const route = location.hash || '#/';
   sidebar.querySelectorAll('a[data-stage]').forEach((a) => {
     a.classList.toggle('active', a.getAttribute('href') === route);
   });
 }
 
-// Each view may return a cleanup function (e.g. to remove window-level
-// keyboard listeners). The router invokes it before rendering the next view
-// so listeners do not leak across stages.
 let currentCleanup = null;
 
 async function render() {
-  const route = location.hash || '#/setup';
+  const route = location.hash || '#/';
   if (!location.hash) {
-    location.hash = '#/setup';
+    location.hash = '#/';
     return;
   }
   activateNav();
-  const handler = ROUTES[route] ?? ROUTES['#/setup'];
+  const handler = ROUTES[route] ?? ROUTES['#/'];
 
   if (typeof currentCleanup === 'function') {
     try { currentCleanup(); } catch (e) { console.warn('view cleanup error:', e); }
@@ -88,17 +119,36 @@ async function render() {
   }
 
   viewEl.innerHTML = '';
-  viewEl.className = 'view'; // reset any view-specific classes
+  viewEl.className = 'view';
   document.title = (TITLES[route] ? TITLES[route] + ' · ' : '') + 'Literature Review Pipeline';
   const result = await handler();
   if (typeof result === 'function') currentCleanup = result;
   refreshSidebarStatus();
 }
 
+// Topbar "Advanced view" toggle. Mounted on DOMContentLoaded.
+function mountAdvancedToggle() {
+  const slot = document.querySelector('.topbar-actions');
+  if (!slot) return;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'topbar-advanced-toggle';
+  btn.textContent = isAdvancedMode() ? '✕ Advanced view' : '⚙ Advanced view';
+  btn.title = 'Toggle the seven-stage sidebar view. Default is the guided conveyor.';
+  btn.addEventListener('click', () => {
+    setAdvancedMode(!isAdvancedMode());
+    btn.textContent = isAdvancedMode() ? '✕ Advanced view' : '⚙ Advanced view';
+    refreshSidebarStatus();
+  });
+  slot.appendChild(btn);
+}
+
 window.addEventListener('hashchange', render);
 window.addEventListener('DOMContentLoaded', () => {
+  applyAdvancedMode();
   const aiSlot = document.querySelector('.topbar-actions');
   if (aiSlot) mountAiStatus(aiSlot);
+  mountAdvancedToggle();
   refreshSidebarStatus();
   render();
 });

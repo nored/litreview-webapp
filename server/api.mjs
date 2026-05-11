@@ -24,6 +24,7 @@ import * as positioning from './lib/positioning.mjs';
 import * as catalogue from './lib/catalogue.mjs';
 import * as catalogueGrounded from './lib/catalogue_grounded.mjs';
 import * as remediation from './lib/remediation.mjs';
+import * as conveyor from './lib/conveyor.mjs';
 import * as vectors from './lib/vectors.mjs';
 import * as embedder from './lib/embedder.mjs';
 import * as embedDaemon from './lib/embed_daemon.mjs';
@@ -1289,6 +1290,20 @@ router.put('/api/catalogue/state', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+// "The conveyor" — guided default UI. Walks the pipeline state and
+// returns an ordered list of events the client renders as a thread:
+// completed milestones above, the one current action prominent, hard
+// gates that refuse to let the user proceed below specific thresholds
+// (e.g. too few notes for synthesis).
+router.get('/api/conveyor/next', async (_req, res) => {
+  try {
+    const result = await conveyor.pickNext();
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

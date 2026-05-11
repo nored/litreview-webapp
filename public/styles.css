@@ -43,13 +43,36 @@ a:hover { text-decoration: underline; }
 
 .brand { font-weight: 600; font-size: 15px; }
 
-.topbar-actions { display: flex; gap: 8px; }
+.topbar-actions { display: flex; gap: 8px; align-items: center; }
+.topbar-advanced-toggle {
+  font-size: 12px;
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.topbar-advanced-toggle:hover {
+  background: var(--bg-elev);
+  color: var(--fg);
+  border-color: var(--accent);
+}
 
 .layout {
   display: grid;
   grid-template-columns: 220px 1fr;
   min-height: calc(100vh - 49px);
 }
+
+/* Conveyor mode: hide the sidebar entirely and let the view fill. */
+body.mode-conveyor .layout {
+  grid-template-columns: 1fr;
+}
+body.mode-conveyor .sidebar { display: none; }
+
+/* Advanced mode is the default look (sidebar visible) — no override
+   needed; the rules above only apply when mode-conveyor is on. */
 
 .sidebar {
   border-right: 1px solid var(--border);
@@ -2698,4 +2721,127 @@ code { font-family: var(--mono); font-size: 12px; padding: 1px 4px; background: 
 .loop-card-actions { margin-top: 8px; }
 
 .loop-refresh { margin-top: 18px; }
+
+/* ─────────────────────────────────────────────────────────────────────
+   The conveyor — vertical thread of pipeline events
+   ──────────────────────────────────────────────────────────────────── */
+
+.view-conveyor {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 28px 24px 64px;
+}
+
+.conveyor-header {
+  margin-bottom: 26px;
+}
+.conveyor-title {
+  font-size: 28px;
+  font-weight: 600;
+  margin: 4px 0 0;
+  letter-spacing: -0.01em;
+}
+.conveyor-status {
+  font-size: 13px;
+  color: var(--fg-muted);
+  margin-bottom: 4px;
+}
+.conveyor-status-phase {
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.conveyor-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.conveyor-event {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 18px;
+  background: var(--bg-elev);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+.conveyor-event-titlerow {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.conveyor-event-icon {
+  font-size: 14px;
+  font-weight: 700;
+  min-width: 16px;
+  display: inline-block;
+  text-align: center;
+}
+.conveyor-event-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+.conveyor-event-summary {
+  margin-left: auto;
+  font-weight: normal;
+}
+.conveyor-event-detail {
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--fg);
+}
+.conveyor-event-action { margin-top: 12px; }
+
+/* Done — compact, muted, ✓ green */
+.conveyor-done {
+  background: #f7faf8;
+  border-color: #cfe4d8;
+  padding: 10px 16px;
+}
+.conveyor-done .conveyor-event-icon { color: #1f7a3d; }
+.conveyor-done .conveyor-event-title { color: var(--fg-muted); font-weight: 500; }
+
+/* Soft — non-blocking warning, amber tint */
+.conveyor-soft {
+  background: #fff8e1;
+  border-color: #f3d680;
+}
+.conveyor-soft .conveyor-event-icon { color: #8a5a00; }
+
+/* Current (open) — the prominent action */
+.conveyor-current.conveyor-open {
+  background: linear-gradient(180deg, #faf6ff 0%, var(--bg-elev) 100%);
+  border-color: #b89df0;
+  border-width: 2px;
+  padding: 18px 22px;
+  box-shadow: 0 1px 0 rgba(184, 157, 240, 0.25);
+}
+.conveyor-current .conveyor-event-icon { color: #6731c5; }
+.conveyor-current .conveyor-event-title { font-size: 17px; }
+
+/* Gate — hard refusal, red, blocks downstream */
+.conveyor-gate {
+  background: #fcebe8;
+  border-color: #f3c0bb;
+  border-width: 2px;
+}
+.conveyor-gate .conveyor-event-icon { color: #b1283a; }
+.conveyor-gate .conveyor-event-title { color: #b1283a; }
+
+/* Locked — future steps, ghosted */
+.conveyor-locked {
+  opacity: 0.45;
+  background: transparent;
+}
+.conveyor-locked .conveyor-event-icon { color: var(--fg-muted); }
+.conveyor-locked .conveyor-event-title { color: var(--fg-muted); font-weight: 500; }
+
+/* Idle — deliverables ready, gold tint */
+.conveyor-idle {
+  background: #fffbea;
+  border-color: #f3d680;
+}
+.conveyor-idle .conveyor-event-icon { color: #8a5a00; }
+.conveyor-idle .conveyor-event-title { color: #8a5a00; }
 
