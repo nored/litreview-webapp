@@ -56,7 +56,7 @@ const FIELD_QUERIES = {
     'limitations the authors themselves admit, weaknesses, threats to validity, what does not work, caveats',
   gaps_this_paper_opens:
     'future work, open questions, what remains unaddressed, what the authors leave for follow-up',
-  relevance_to_thesis_topic:
+  relevance_to_the_thesis_topic:
     'core contribution and applicability of this work to other research, central thesis claims',
 };
 
@@ -156,6 +156,23 @@ function findMetrics(text) {
   return Array.from(found);
 }
 
+// Deterministic novelty-strength heuristic. Inputs are the boolean signals
+// the embedding+regex extractor produces (or that an already-saved note
+// carries in its frontmatter). Returns one of strong/moderate/incremental/
+// unclear so the field always satisfies the enum constraint.
+export function deriveNovelty(signals = {}) {
+  const ext = !!signals.external_ground_truth;
+  const self = !!signals.self_constructed_ground_truth;
+  const base = !!signals.baseline_compared;
+  const uq = !!signals.has_uncertainty_quantification;
+  if (ext && base && uq) return 'strong';
+  if (ext && base) return 'moderate';
+  if (self && !base) return 'incremental';
+  if (!base && !ext && !self) return 'unclear';
+  if (self) return 'incremental';
+  return 'unclear';
+}
+
 function findCaseCount(text) {
   if (!text) return 0;
   const m = text.match(CASE_COUNT_RE);
@@ -208,7 +225,7 @@ export async function extractFrontmatterByEmbeddings(opts) {
   // anchor for category and relevance, and the method bundle for method
   // family classification. Falls back to title alone if everything's empty.
   const aboutText = (
-    bundles.relevance_to_thesis_topic?.text ||
+    bundles.relevance_to_the_thesis_topic?.text ||
     bundles.problem_statement?.text ||
     paperMeta.abstract_short ||
     paperMeta.title ||
@@ -296,6 +313,14 @@ export async function extractFrontmatterByEmbeddings(opts) {
   const combined = `${methodText}\n${aboutText}`;
   extracted.hobby_project_scale = HOBBY_HINTS.test(combined);
 
+  // 5b. Novelty strength heuristic — derived from the same eval-bundle
+  // signals so the field doesn't sit empty when the LLM is off or omits
+  // it. Strong evidence requires external GT + baselines + UQ; the
+  // absence of baselines or presence of self-constructed GT pushes
+  // toward incremental. Insufficient signal stays 'unclear' (a valid
+  // enum value), letting validation pass while the student decides.
+  extracted.novelty_strength = deriveNovelty(extracted);
+
   // 6. Limitations (paragraph-level extraction). Look for known marker
   // phrases inside the limitations bundle and return matching paragraphs.
   if (limText) {
@@ -322,7 +347,7 @@ export async function extractFrontmatterByEmbeddings(opts) {
 //       ground_truth_and_evaluation: { ... },
 //       stated_limitations:       { ... },
 //       gaps_this_paper_opens:    { ... },
-//       relevance_to_thesis_topic:{ ... },
+//       relevance_to_the_thesis_topic:{ ... },
 //       frontmatter:              { ... },
 //     }
 //   }
@@ -639,21 +664,36 @@ export async function groundSection(paperId, field, text) {
 // detour. Returns null if we don't have enough signal.
 function templateRelevanceBody(extracted, paperMeta, topic) {
   if (!extracted?.extracted || !extracted.relevance_to_topic) return null;
-  const sim = extracted.relevance_to_topic_cosine || 0;
-  const relevance = extracted.relevance_to_topic; // core | adjacent | peripheral
-  const mustCite = !!extracted.must_cite;
-  const topicTitle = topic.title || 'the thesis topic';
+  return relevanceBodyFromValues({
+    relevance: extracted.relevance_to_topic,
+    cosine: extracted.relevance_to_topic_cosine,
+    mustCite: extracted.must_cite,
+    topicTitle: topic?.title,
+  });
+}
+
+// Build the relevance-to-thesis body from a frontmatter-shaped object.
+// Used for backfilling existing notes where the cosine isn't available
+// but the relevance bucket + must_cite were already stored. Returns
+// null when the relevance bucket is missing.
+export function relevanceBodyFromValues({ relevance, cosine, mustCite, topicTitle }) {
+  const r = String(relevance || '').toLowerCase();
+  if (!['core', 'adjacent', 'peripheral'].includes(r)) return null;
+  const title = topicTitle || 'the thesis topic';
+  const cosTag = (typeof cosine === 'number' && cosine > 0)
+    ? ` (cosine similarity ${cosine.toFixed(2)} to the topic abstract)`
+    : '';
   const verdicts = {
-    core: `This paper sits at the centre of work on ${topicTitle} (cosine similarity ${sim.toFixed(2)} to the topic abstract).`,
-    adjacent: `This paper is adjacent to ${topicTitle} (cosine similarity ${sim.toFixed(2)}) — it shares vocabulary and concerns but addresses a related rather than identical problem.`,
-    peripheral: `This paper is peripheral to ${topicTitle} (cosine similarity ${sim.toFixed(2)}). It may serve as a methodological reference rather than a topical one.`,
+    core: `This paper sits at the centre of work on ${title}${cosTag}.`,
+    adjacent: `This paper is adjacent to ${title}${cosTag} — it shares vocabulary and concerns but addresses a related rather than identical problem.`,
+    peripheral: `This paper is peripheral to ${title}${cosTag}. It may serve as a methodological reference rather than a topical one.`,
   };
   const citeClause = mustCite
     ? 'The thesis must cite this paper.'
-    : (relevance === 'core' ? 'The thesis should cite this paper.' :
-       relevance === 'adjacent' ? 'The thesis may cite this paper as context.' :
+    : (r === 'core' ? 'The thesis should cite this paper.' :
+       r === 'adjacent' ? 'The thesis may cite this paper as context.' :
        'Citation is optional unless the methodology transfers directly.');
-  return `${verdicts[relevance]} ${citeClause}`;
+  return `${verdicts[r]} ${citeClause}`;
 }
 
 function emptyBundles() {

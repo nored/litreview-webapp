@@ -11,6 +11,7 @@ import { DATA_FILES, DATA_DIR, PROTOCOL_FILES } from '../paths.mjs';
 import { ensureDir, readText } from '../storage.mjs';
 import { writeCsv, parseCsv } from './csv.mjs';
 import { searchArxiv, searchOpenalex, searchSemanticScholar, dedupe } from './search.mjs';
+import { enrichByDoi, mergeEnrichment } from './bibenrich.mjs';
 import { parseTopic } from './topic_md.mjs';
 import { parse as parseQueries } from './queries_md.mjs';
 import {
@@ -181,6 +182,37 @@ export async function* runSearch({ signal, mode = 'fresh', isDiscarded = noop } 
   yield { type: 'dedup_start', total_raw: accumulator.length };
   const deduped = dedupe(accumulator);
   yield { type: 'dedup_done', total_raw: accumulator.length, total_deduped: deduped.length };
+
+  // Bibliographic enrichment: for rows that have a DOI but are missing
+  // venue/authors/year, one OpenAlex lookup fills the canonical record.
+  // Bounded concurrency, silent failure — never blocks the search.
+  const needsEnrich = deduped.filter((r) =>
+    r.doi && (!String(r.venue || '').trim() || !String(r.authors || '').trim() || !String(r.year || '').trim())
+  );
+  if (needsEnrich.length > 0) {
+    yield { type: 'enrich_start', total: needsEnrich.length };
+    const concurrency = 4;
+    let enriched = 0;
+    for (let i = 0; i < needsEnrich.length; i += concurrency) {
+      if (signal?.aborted) break;
+      const batch = needsEnrich.slice(i, i + concurrency);
+      await Promise.all(batch.map(async (row) => {
+        const data = await enrichByDoi(row.doi, topic.contact_email);
+        const { changed } = mergeEnrichment(row, data);
+        if (changed) enriched++;
+      }));
+      yield { type: 'enrich_progress', done: Math.min(i + concurrency, needsEnrich.length), total: needsEnrich.length };
+    }
+    yield { type: 'enrich_done', enriched, total: needsEnrich.length };
+  }
+
+  // arXiv preprints without an explicit venue: stamp 'arXiv' so triage
+  // and stage 4 don't trip on an empty required field.
+  for (const r of deduped) {
+    if (!String(r.venue || '').trim() && (r.arxiv_id || /arxiv/i.test(String(r.source_database || '')))) {
+      r.venue = 'arXiv';
+    }
+  }
 
   // Append manual additions
   let manualCount = 0;

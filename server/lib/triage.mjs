@@ -139,6 +139,29 @@ export async function setAiSuggestion({ row_index, label, reason }) {
   });
 }
 
+// Patch identification fields on a row identified by paper_id. Used by
+// lazy enrichment when opening a note: never overwrites non-empty values,
+// never changes triage_label, so paper_id assignment stays stable.
+export async function patchRowByPaperId(paperId, partial) {
+  return serialize(async () => {
+    const rows = await loadTriagedRows();
+    const row = rows.find((r) => r.paper_id === paperId);
+    if (!row) return null;
+    let changed = false;
+    for (const [k, v] of Object.entries(partial || {})) {
+      if (k === 'paper_id' || k === 'triage_label' || k === 'triage_reason') continue;
+      const cur = String(row[k] ?? '').trim();
+      const incoming = String(v ?? '').trim();
+      if (!cur && incoming) {
+        row[k] = v;
+        changed = true;
+      }
+    }
+    if (changed) await persistTriagedRows(rows);
+    return changed ? row : null;
+  });
+}
+
 export async function summary() {
   const rows = await loadTriagedRows();
   const counts = { total: rows.length, include: 0, exclude: 0, maybe: 0, pending: 0 };

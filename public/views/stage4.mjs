@@ -114,7 +114,7 @@ const FIELD_RULES = {
       'Never write "more work is needed", "future work could", or any generic placeholder. ' +
       'Each gap must name a concrete unexamined dimension, dataset, regime, or class of problem.',
   },
-  relevance_to_thesis_topic: {
+  relevance_to_the_thesis_topic: {
     label: 'Relevance to the thesis topic',
     rule:
       'Write 2 to 3 sentences. State how this paper relates to the thesis topic. ' +
@@ -185,7 +185,7 @@ Year: ${paper.year}
 Venue: ${paper.venue}
 
 ${topic.title ? `Thesis topic: ${topic.title}\n${topic.description ? 'Thesis description: ' + topic.description + '\n' : ''}` : ''}
-${field === 'relevance_to_thesis_topic'
+${field === 'relevance_to_the_thesis_topic'
     ? 'You are writing the "Relevance to the thesis topic" section.\n'
     : `You are writing the "${r.label}" section of a structured literature-review note.\n`}
 ${r.rule}
@@ -447,17 +447,17 @@ async function draftPaperSectioned({
   // They populate the frontmatter and the relevance-to-thesis body
   // section, leaving only 5 body sections that genuinely need an LLM.
   applyExtractedFrontmatter(fm, bundles.extracted_frontmatter || {});
-  if (bundles.templated_relevance_body && !note.body.relevance_to_thesis_topic?.trim()) {
-    note.body.relevance_to_thesis_topic = bundles.templated_relevance_body;
-    onSectionStream?.('relevance_to_thesis_topic', bundles.templated_relevance_body);
+  if (bundles.templated_relevance_body && !note.body.relevance_to_the_thesis_topic?.trim()) {
+    note.body.relevance_to_the_thesis_topic = bundles.templated_relevance_body;
+    onSectionStream?.('relevance_to_the_thesis_topic', bundles.templated_relevance_body);
   }
-  status('relevance_to_thesis_topic', 'done', 'extracted (cosine)');
+  status('relevance_to_the_thesis_topic', 'done', 'extracted (cosine)');
   sectionsDone++;
   status('frontmatter', 'done', 'extracted (embedding + regex)');
   sectionsDone++;
 
   // Remaining body sections still need LLM synthesis — these write prose.
-  const sectionKeysToLLM = sectionKeys.filter((k) => k !== 'relevance_to_thesis_topic');
+  const sectionKeysToLLM = sectionKeys.filter((k) => k !== 'relevance_to_the_thesis_topic');
 
   const sys = 'You are an academic literature-review assistant writing structured notes on research papers. Be concise, concrete, and faithful to the provided excerpts. Output only the requested section body — plain prose, no headings, no markdown formatting, no bullet lists, no preamble.';
 
@@ -620,6 +620,12 @@ function applyExtractedFrontmatter(fm, ex) {
   if (ex.self_constructed_ground_truth != null) fm.quality_flags.self_constructed_ground_truth = ex.self_constructed_ground_truth;
   if (ex.hobby_project_scale != null) fm.quality_flags.hobby_project_scale = ex.hobby_project_scale;
   if (ex.limitations && ex.limitations.length > 0) fm.limitations_authors_state = ex.limitations;
+  // Deterministic novelty heuristic — server-derived. The LLM frontmatter
+  // call can still override it, but if AI is off this keeps the field from
+  // tripping validation on every note.
+  if (ex.novelty_strength && !fm.claims.novelty_strength) {
+    fm.claims.novelty_strength = ex.novelty_strength;
+  }
 }
 
 async function runSectionedDraft({
@@ -642,7 +648,7 @@ async function runSectionedDraft({
     ground_truth_and_evaluation: 'Evaluation',
     stated_limitations: 'Limitations',
     gaps_this_paper_opens: 'Gaps',
-    relevance_to_thesis_topic: 'Relevance',
+    relevance_to_the_thesis_topic: 'Relevance',
     frontmatter: 'Frontmatter (structured fields)',
   };
   if (useCritic) TASK_LABELS.critic = 'Audit & revise';
@@ -1001,7 +1007,7 @@ export async function renderStage4(root) {
         ['ground_truth_and_evaluation', 'Eval'],
         ['stated_limitations', 'Limit.'],
         ['gaps_this_paper_opens', 'Gaps'],
-        ['relevance_to_thesis_topic', 'Relev.'],
+        ['relevance_to_the_thesis_topic', 'Relev.'],
         ['frontmatter', 'Frontmatter'],
       ];
       if (auditMode) TASK_ORDER.push(['critic', 'Audit']);

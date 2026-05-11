@@ -175,13 +175,37 @@ function jaccard(a, b) {
   return inter / (sa.size + sb.size - inter);
 }
 
+// Fields we field-merge across same-DOI duplicates: prefer the longest
+// non-empty value. This rescues records like venue/pdf_url when one source
+// returned them empty (often S2) and another had them (often OpenAlex).
+const MERGE_TEXT_FIELDS = [
+  'title', 'authors', 'year', 'venue', 'abstract',
+  'doi', 'arxiv_id', 'url', 'pdf_url',
+];
+
+function mergeRowInto(target, src) {
+  for (const k of MERGE_TEXT_FIELDS) {
+    const a = String(target[k] ?? '').trim();
+    const b = String(src[k] ?? '').trim();
+    if (b && b.length > a.length) target[k] = src[k];
+  }
+  // Record provenance: keep the originating source list rather than
+  // overwriting. Useful for debugging where each field came from.
+  const merged = new Set(
+    String(target.source_database || '').split('+').filter(Boolean)
+  );
+  if (src.source_database) merged.add(src.source_database);
+  target.source_database = [...merged].join('+');
+}
+
 export function dedupe(rows, threshold = 0.85) {
   const byDoi = new Map();
   const noDoi = [];
   for (const r of rows) {
     const doi = (r.doi || '').toLowerCase().trim();
     if (doi) {
-      if (!byDoi.has(doi)) byDoi.set(doi, r);
+      if (!byDoi.has(doi)) byDoi.set(doi, { ...r });
+      else mergeRowInto(byDoi.get(doi), r);
     } else {
       noDoi.push(r);
     }
@@ -191,12 +215,14 @@ export function dedupe(rows, threshold = 0.85) {
   for (const r of noDoi) {
     const nt = normalizeTitle(r.title);
     if (!nt) continue;
-    let dup = false;
-    for (const st of seenTitles) {
-      if (jaccard(nt, st) >= threshold) { dup = true; break; }
+    let dupIdx = -1;
+    for (let i = 0; i < seenTitles.length; i++) {
+      if (jaccard(nt, seenTitles[i]) >= threshold) { dupIdx = i; break; }
     }
-    if (!dup) {
-      out.push(r);
+    if (dupIdx >= 0) {
+      mergeRowInto(out[dupIdx], r);
+    } else {
+      out.push({ ...r });
       seenTitles.push(nt);
     }
   }
