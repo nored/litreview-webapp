@@ -86,6 +86,9 @@ function renderHeader(summary, events) {
       ]),
     ]),
     h('h1', { class: 'conveyor-title' }, ['Literature review']),
+    h('p', { class: 'conveyor-intro muted small' }, [
+      'One step at a time. Click the highlighted card to open its editor; come back here when done.',
+    ]),
   ]);
 }
 

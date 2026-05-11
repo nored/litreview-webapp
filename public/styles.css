@@ -41,7 +41,29 @@ a:hover { text-decoration: underline; }
   z-index: 10;
 }
 
-.brand { font-weight: 600; font-size: 15px; }
+.brand {
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--fg);
+  text-decoration: none;
+}
+.brand:hover { color: var(--accent); text-decoration: none; }
+
+.topbar-overview-link {
+  display: inline-flex;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 5px 12px;
+  background: var(--accent);
+  color: white !important;
+  border-radius: 999px;
+  text-decoration: none;
+}
+.topbar-overview-link:hover {
+  background: var(--accent-hover, #1958c2);
+  text-decoration: none;
+}
 
 .topbar-actions { display: flex; gap: 8px; align-items: center; }
 .topbar-advanced-toggle {
@@ -121,6 +143,7 @@ body.mode-conveyor .sidebar { display: none; }
   padding: 24px 32px;
   max-width: 1100px;
   width: 100%;
+  margin: 0 auto;
 }
 
 .view h1 {

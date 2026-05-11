@@ -124,6 +124,29 @@ async function render() {
   const result = await handler();
   if (typeof result === 'function') currentCleanup = result;
   refreshSidebarStatus();
+  applyOverviewVisibility();
+}
+
+// Topbar "← Overview" button. Mounted at DOMContentLoaded; shows only
+// when we're inside a stage view (i.e. NOT on `#/`). The brand is also
+// a home link, but this is the loud, obvious escape hatch.
+let overviewBtn = null;
+function mountOverviewLink() {
+  const slot = document.querySelector('.topbar-actions');
+  if (!slot) return;
+  overviewBtn = document.createElement('a');
+  overviewBtn.href = '#/';
+  overviewBtn.className = 'topbar-overview-link';
+  overviewBtn.textContent = '← Overview';
+  overviewBtn.title = 'Back to the guided overview';
+  // Insert at the start of topbar-actions so it sits left of the AI pill.
+  slot.insertBefore(overviewBtn, slot.firstChild);
+  applyOverviewVisibility();
+}
+function applyOverviewVisibility() {
+  if (!overviewBtn) return;
+  const onHome = !location.hash || location.hash === '#/';
+  overviewBtn.style.display = onHome ? 'none' : '';
 }
 
 // Topbar "Advanced view" toggle. Mounted on DOMContentLoaded.
@@ -148,6 +171,7 @@ window.addEventListener('DOMContentLoaded', () => {
   applyAdvancedMode();
   const aiSlot = document.querySelector('.topbar-actions');
   if (aiSlot) mountAiStatus(aiSlot);
+  mountOverviewLink();
   mountAdvancedToggle();
   refreshSidebarStatus();
   render();
