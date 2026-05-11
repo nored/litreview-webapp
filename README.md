@@ -33,6 +33,8 @@ API keys live in `project/data/_credentials.json` (gitignored, file mode 0600). 
 
 Embeddings run server-side via `@huggingface/transformers` with bge-small-en-v1.5 (384-dim, L2-normalized). First call lazy-loads the model into `~/.cache/huggingface/` (~130 MB); subsequent calls reuse the in-process pipeline.
 
+Dtype is auto-picked per platform: **fp16 on Apple Silicon** (M-series, via ONNX Runtime — MLX itself is Python/Swift only and can't be called from a Node toolchain), **fp32 elsewhere**. Override with `LITREVIEW_EMBED_DTYPE=fp32|fp16|q8|q4` if you want to swap (q8 / q4 are quantized — smaller and faster, slight accuracy hit). The embedder falls back to fp32 silently if the requested variant isn't published for this model.
+
 The embed daemon scans `candidates_triaged.csv` and `notes/` for anything new or changed and feeds the encoder. The vector store lives at `project/data/_vectors/` as jsonl-per-kind (papers / chunks / notes).
 
 The drafter, critic, classifier, gap detection, catalogue grounding, quote grounding, and snowballing all consume those vectors. No TF-IDF, no k-means, no HDBSCAN — only sentence-transformers utilities ported to JS (`cosSim`, `paraphraseMining`, `communityDetection`, `semanticSearch`).

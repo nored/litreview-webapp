@@ -28,15 +28,54 @@ const DIM = 384;
 env.allowRemoteModels = true;
 env.allowLocalModels = true;
 
+// Auto-pick a sensible dtype for this machine. The library otherwise
+// warns "dtype not specified, using fp32" on every boot.
+//
+//   - Apple Silicon (darwin + arm64): bge-small ships fp16 + q8 variants
+//     that work well through ONNX Runtime's CoreML execution provider
+//     (the Mac equivalent of MLX for our JS toolchain — MLX itself is
+//     Python/Swift only and can't be called from @huggingface/transformers).
+//     fp16 halves memory and is meaningfully faster than fp32 on M-series.
+//   - Linux/Windows on CPU: fp32 stays the default — onnxruntime-node's
+//     CPU EP doesn't gain much from fp16 without AVX-512.
+//   - Any platform: LITREVIEW_EMBED_DTYPE env var overrides
+//     (`fp32` | `fp16` | `q8` | `q4`). Set this if you want to swap.
+//
+// Vectors persisted to project/data/_vectors/*.jsonl carry no dtype
+// fingerprint, so switching between fp32 and fp16 mid-project is safe
+// in practice (cosine geometry barely shifts), but if you switch
+// FROM fp32 TO q4 you may want to re-embed to keep scores comparable.
+function pickDtype() {
+  const override = (process.env.LITREVIEW_EMBED_DTYPE || '').toLowerCase().trim();
+  if (override) return override;
+  if (process.platform === 'darwin' && process.arch === 'arm64') return 'fp16';
+  return 'fp32';
+}
+
+const DTYPE = pickDtype();
+
 let extractorPromise = null;
 
 function getExtractor() {
   if (!extractorPromise) {
-    extractorPromise = pipeline('feature-extraction', MODEL_ID).catch((err) => {
-      // Don't pin a failed promise — let the next call retry the load.
-      extractorPromise = null;
-      throw err;
-    });
+    extractorPromise = pipeline('feature-extraction', MODEL_ID, { dtype: DTYPE })
+      .catch(async (err) => {
+        // fp16 / q8 / q4 builds may be missing for some model exports.
+        // Fall back to fp32 silently so the daemon doesn't die on first
+        // run for a less-common platform.
+        if (DTYPE !== 'fp32') {
+          console.warn(`embedder: ${DTYPE} load failed (${err.message}); falling back to fp32`);
+          extractorPromise = pipeline('feature-extraction', MODEL_ID, { dtype: 'fp32' })
+            .catch((fallbackErr) => {
+              extractorPromise = null;
+              throw fallbackErr;
+            });
+          return extractorPromise;
+        }
+        // Don't pin a failed promise — let the next call retry the load.
+        extractorPromise = null;
+        throw err;
+      });
   }
   return extractorPromise;
 }
@@ -79,6 +118,7 @@ export async function embedOne(text) {
   return m.data;
 }
 
-/** What model + dim is in use. Surfaced so tests / status pills can show it. */
+/** What model + dim + dtype is in use. Surfaced so tests / status pills can show it. */
 export const MODEL = MODEL_ID;
 export const DIMENSIONS = DIM;
+export const DTYPE_IN_USE = DTYPE;
