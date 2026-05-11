@@ -101,7 +101,22 @@ function renderEventCard(event, idx, currentIdx, summary) {
   const baseClasses = ['conveyor-event', `conveyor-${event.status}`, `conveyor-kind-${event.kind}`];
   if (isCurrent) baseClasses.push('conveyor-current');
 
-  const card = h('div', { class: baseClasses.join(' ') });
+  // Past items get a tooltip+hover state so "I can revisit setup" is
+  // discoverable. Locked items don't navigate anywhere meaningful, so
+  // we leave them un-clickable to communicate the prerequisite.
+  const clickable = event.href && event.status !== 'locked';
+  if (clickable) baseClasses.push('conveyor-clickable');
+
+  // The card itself is an <a> when clickable so the whole surface is
+  // hit-targetable (better than a small button in the corner). Falls
+  // back to a div when locked.
+  const card = clickable
+    ? h('a', {
+        class: baseClasses.join(' '),
+        href: event.href,
+        title: event.status === 'done' ? 'Open to review or edit' : '',
+      })
+    : h('div', { class: baseClasses.join(' ') });
 
   // Status icon to the left of the title.
   const icon =
@@ -118,6 +133,11 @@ function renderEventCard(event, idx, currentIdx, summary) {
     event.summary
       ? h('div', { class: 'conveyor-event-summary muted small' }, [event.summary])
       : null,
+    // "Edit" hint on the right for done items — affirms they're
+    // revisitable without needing an extra button.
+    event.status === 'done' && clickable
+      ? h('span', { class: 'conveyor-event-edit-hint muted small' }, ['edit →'])
+      : null,
   ]);
   card.appendChild(titleRow);
 
@@ -130,7 +150,13 @@ function renderEventCard(event, idx, currentIdx, summary) {
       ? 'btn btn-ai btn-large'
       : (event.kind === 'gate' ? 'btn btn-primary' : 'btn');
     card.appendChild(h('div', { class: 'conveyor-event-action' }, [
-      h('a', { class: btnClass, href: event.action.href }, [event.action.label]),
+      h('a', {
+        class: btnClass,
+        href: event.action.href,
+        // Inner link — stop propagation so clicking the button doesn't
+        // double-fire with the card-level navigation.
+        onclick: (e) => { e.stopPropagation(); },
+      }, [event.action.label]),
     ]));
   }
 

@@ -65,6 +65,62 @@ a:hover { text-decoration: underline; }
   text-decoration: none;
 }
 
+/* Stage navigation strips — top & bottom of every stage view.
+   They live INSIDE .view but use negative margin to extend across
+   the view's horizontal padding so they read as full bars. The
+   one-shot pulse animation is the "hint" the user notices on open. */
+.stage-nav-strip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px 16px;
+  margin-left: -32px;
+  margin-right: -32px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.stage-nav-strip:hover {
+  background: var(--accent-soft, #eef4ff);
+  color: var(--accent);
+  border-color: var(--accent);
+  text-decoration: none;
+}
+.stage-nav-arrow {
+  font-size: 16px;
+  font-weight: 700;
+}
+.stage-nav-top {
+  margin-top: -8px;
+  margin-bottom: 22px;
+  animation: stageNavHint 1.2s ease-out;
+}
+.stage-nav-bottom {
+  margin-top: 28px;
+  margin-bottom: -8px;
+  animation: stageNavHint 1.2s ease-out 0.18s backwards;
+}
+@keyframes stageNavHint {
+  0%   { background: var(--accent); color: white; border-color: var(--accent); }
+  60%  { background: var(--accent-soft, #eef4ff); color: var(--accent); }
+  100% { background: var(--bg-elev); color: var(--fg-muted); border-color: var(--border); }
+}
+
+/* Views that fill the viewport (deep-read, triage) don't carry
+   horizontal padding — their strips don't need negative margins. */
+.view-deepread .stage-nav-strip,
+.view-triage .stage-nav-strip {
+  margin-left: 0;
+  margin-right: 0;
+}
+
 .topbar-actions { display: flex; gap: 8px; align-items: center; }
 .topbar-advanced-toggle {
   font-size: 12px;
@@ -2781,12 +2837,31 @@ code { font-family: var(--mono); font-size: 12px; padding: 1px 4px; background: 
 }
 
 .conveyor-event {
+  display: block;
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 14px 18px;
   background: var(--bg-elev);
-  transition: opacity 120ms ease, transform 120ms ease;
+  transition: opacity 120ms ease, transform 120ms ease, border-color 120ms ease;
+  color: inherit;
+  text-decoration: none;
 }
+a.conveyor-event { text-decoration: none; }
+.conveyor-clickable {
+  cursor: pointer;
+}
+.conveyor-clickable:hover {
+  border-color: var(--accent);
+  text-decoration: none;
+  transform: translateY(-1px);
+}
+.conveyor-event-edit-hint {
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity 120ms ease;
+  font-style: italic;
+}
+.conveyor-clickable:hover .conveyor-event-edit-hint { opacity: 1; }
 .conveyor-event-titlerow {
   display: flex;
   align-items: baseline;

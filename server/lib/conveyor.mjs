@@ -75,6 +75,9 @@ export async function pickNext() {
     detail: setupDone
       ? null
       : 'Tell the system what your thesis is about. Topic, search queries, and inclusion criteria are required before anything else can run.',
+    // Every event gets a stage URL it can be opened at — done events
+    // still navigate the user there for review/edit.
+    href: '#/setup',
     action: setupDone ? null : { label: 'Configure setup', href: '#/setup' },
   });
 
@@ -96,6 +99,7 @@ export async function pickNext() {
     detail: searchDone
       ? null
       : 'Run your saved search queries across arXiv, OpenAlex, and Semantic Scholar. Deduplication and rate limiting happen automatically.',
+    href: '#/stage1',
     action: (setupDone && !searchDone) ? { label: 'Run search', href: '#/stage1' } : null,
   });
 
@@ -122,6 +126,7 @@ export async function pickNext() {
       : (pending > 0
           ? `${pending.toLocaleString()} records still need an include/exclude/maybe label. Auto-triage uses the trained embedding classifier to clear them.`
           : 'Mark each search hit as include, maybe, or exclude. The embedding classifier learns from your decisions and proposes the rest.'),
+    href: '#/stage2',
     action: (searchDone && !triageDone) ? { label: pending > 0 ? `Open triage (${pending} pending)` : 'Open triage', href: '#/stage2' } : null,
     metrics: triageSum,
   });
@@ -151,6 +156,7 @@ export async function pickNext() {
       title: 'Some PDFs missing',
       summary: `${labeledWithoutPdf} include/maybe papers have no PDF — non-blocking.`,
       detail: `Some PDFs couldn\'t be downloaded automatically (paywalls, anti-bot walls). They\'re skipped for deep-read. Use the manual retrieval list if you want them included.`,
+      href: '#/stage3',
       action: { label: 'Manual retrieval list', href: '#/stage3' },
     });
   }
@@ -188,6 +194,7 @@ export async function pickNext() {
       ? `${notesValid} valid notes`
       : (eligibleCount > 0 ? `${notesValid}/${eligibleCount} valid · ${eligibleDraft} draft · ${eligibleNoNote} missing` : null),
     detail: deepReadDone ? null : drDetail,
+    href: '#/stage4',
     action: (triageDone && !deepReadDone) ? { label: drLabel, href: '#/stage4' } : null,
     metrics: { eligible: eligibleCount, missing: eligibleNoNote, draft: eligibleDraft, valid: notesValid },
   });
@@ -214,6 +221,7 @@ export async function pickNext() {
       title: 'Too few notes for synthesis',
       summary: `${notesValid} valid notes — need at least ${minNotesRequired} for defensible analysis.`,
       detail: `A gap matrix and indicator assessment over fewer than ${minNotesRequired} notes don\'t hold up. Either include more papers (revisit triage) or accept that the synthesis won\'t be defensible.`,
+      href: '#/stage2',
       action: { label: 'Revisit triage', href: '#/stage2' },
     });
   } else if (tooFewNotes) {
@@ -245,6 +253,7 @@ export async function pickNext() {
         title: 'Build candidates and shortlist',
         summary: null,
         detail: 'Generate gap candidates from your notes, score each against the seven thesis quality indicators, produce the accept/refine/reject shortlist.',
+        href: '#/stage7',
         action: { label: 'Open positioning', href: '#/stage7' },
       });
     } else if (candUnscored > 0) {
@@ -255,6 +264,7 @@ export async function pickNext() {
         title: 'Score unscored candidates',
         summary: `${cands.length} candidates · ${candUnscored} unscored`,
         detail: 'Candidates exist but lack verdicts. Run the indicator assessment to populate the shortlist.',
+        href: '#/stage7',
         action: { label: 'Open positioning', href: '#/stage7' },
       });
     } else {
@@ -265,6 +275,7 @@ export async function pickNext() {
         title: 'Candidates & shortlist',
         summary: `${accepted} accepted · ${refinable} refinable · ${cands.length - accepted - refinable} rejected`,
         detail: null,
+        href: '#/stage7',
         action: null,
       });
     }
@@ -291,6 +302,7 @@ export async function pickNext() {
         title: 'Generate the catalogue',
         summary: null,
         detail: `${accepted + refinable} viable topic${(accepted + refinable) === 1 ? '' : 's'} ready. The catalogue drafts a state-of-the-art chapter plus one chapter per candidate, all grounded in your notes via RAG. Output lives in synthesis/catalogue.md.`,
+        href: '#/stage7',
         action: { label: 'Open positioning', href: '#/stage7' },
       });
     } else {
@@ -313,6 +325,7 @@ export async function pickNext() {
           title: 'Catalogue missing must-cite papers',
           summary: `${coverage.stats.must_cite_missing} must-cite paper${coverage.stats.must_cite_missing === 1 ? '' : 's'} not cited in the generated catalogue.`,
           detail: 'Re-generate the catalogue or edit it to include the missing papers. The coverage report shows which ones.',
+          href: '#/stage7',
           action: { label: 'Open positioning', href: '#/stage7' },
         });
       } else {
@@ -325,6 +338,7 @@ export async function pickNext() {
             ? `${coverage.stats.cited_count}/${coverage.stats.total_includes} include papers cited.`
             : 'Generated and saved.',
           detail: null,
+          href: '#/stage7',
           action: null,
         });
       }

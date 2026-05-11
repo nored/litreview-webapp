@@ -95,6 +95,20 @@ const TITLES = {
   '#/stage8': '7. Loop close',
 };
 
+// Linear stage order. Used to render the "next stage" strip at the
+// bottom of every non-overview view. The top strip always goes back to
+// overview (`#/`), so we don't need a prev mapping — the overview is
+// the natural anchor.
+const STAGE_ORDER = [
+  '#/setup', '#/stage1', '#/stage2', '#/stage3', '#/stage4',
+  '#/stage5', '#/stage7', '#/stage8',
+];
+function nextStage(route) {
+  const i = STAGE_ORDER.indexOf(route);
+  if (i < 0) return null;
+  return STAGE_ORDER[i + 1] || null; // null = no next; we'll send back to overview
+}
+
 function activateNav() {
   const route = location.hash || '#/';
   sidebar.querySelectorAll('a[data-stage]').forEach((a) => {
@@ -125,29 +139,42 @@ async function render() {
   if (typeof result === 'function') currentCleanup = result;
   refreshSidebarStatus();
   applyOverviewVisibility();
+  injectStageNavStrips(route);
 }
 
-// Topbar "← Overview" button. Mounted at DOMContentLoaded; shows only
-// when we're inside a stage view (i.e. NOT on `#/`). The brand is also
-// a home link, but this is the loud, obvious escape hatch.
-let overviewBtn = null;
-function mountOverviewLink() {
-  const slot = document.querySelector('.topbar-actions');
-  if (!slot) return;
-  overviewBtn = document.createElement('a');
-  overviewBtn.href = '#/';
-  overviewBtn.className = 'topbar-overview-link';
-  overviewBtn.textContent = '← Overview';
-  overviewBtn.title = 'Back to the guided overview';
-  // Insert at the start of topbar-actions so it sits left of the AI pill.
-  slot.insertBefore(overviewBtn, slot.firstChild);
-  applyOverviewVisibility();
+// Top + bottom navigation strips for stage views. The top strip is
+// always "↑ Back to overview" — the overview is the canonical anchor.
+// The bottom strip points at the next stage in linear order, or back
+// to the overview if there is no next stage. Both strips briefly pulse
+// on mount as a hint that they're clickable (one-shot CSS animation).
+function injectStageNavStrips(route) {
+  if (!route || route === '#/') return;
+  const next = nextStage(route);
+  const nextHref = next || '#/';
+  const nextLabel = next ? `Next: ${TITLES[next] || next}` : '✓ Done — back to overview';
+
+  // Top: back to overview.
+  const top = document.createElement('a');
+  top.href = '#/';
+  top.className = 'stage-nav-strip stage-nav-top';
+  top.innerHTML = `<span class="stage-nav-arrow">↑</span><span>Back to overview</span>`;
+
+  // Bottom: next stage (or back to overview when done).
+  const bottom = document.createElement('a');
+  bottom.href = nextHref;
+  bottom.className = 'stage-nav-strip stage-nav-bottom';
+  bottom.innerHTML = `<span>${nextLabel}</span><span class="stage-nav-arrow">↓</span>`;
+
+  viewEl.insertBefore(top, viewEl.firstChild);
+  viewEl.appendChild(bottom);
 }
-function applyOverviewVisibility() {
-  if (!overviewBtn) return;
-  const onHome = !location.hash || location.hash === '#/';
-  overviewBtn.style.display = onHome ? 'none' : '';
-}
+
+// Note: the topbar "← Overview" button was removed once stage views
+// gained their own top/bottom navigation strips. The brand text in the
+// header stays a home link as a quiet fallback. Keeping these stubs so
+// the existing call sites don't need to change.
+function mountOverviewLink() { /* no-op — strips replace this */ }
+function applyOverviewVisibility() { /* no-op */ }
 
 // Topbar "Advanced view" toggle. Mounted on DOMContentLoaded.
 function mountAdvancedToggle() {
