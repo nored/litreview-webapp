@@ -23,7 +23,7 @@
     "express": "^4.21.0",
     "fast-xml-parser": "^4.5.0",
     "gliner": "^0.0.19",
-    "grobid-js": "file:../grobid-js",
+    "grobid-js": "^0.1.0",
     "node-llama-cpp": "^3.18.1",
     "pdfjs-dist": "^5.7.284",
     "sql.js": "^1.14.1",
