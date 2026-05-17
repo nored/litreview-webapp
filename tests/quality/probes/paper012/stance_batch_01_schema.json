@@ -1,0 +1,30 @@
+{
+  "type": "array",
+  "minItems": 20,
+  "maxItems": 20,
+  "items": {
+    "type": "object",
+    "properties": {
+      "n": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 20
+      },
+      "stance": {
+        "type": "string",
+        "enum": [
+          "supports",
+          "contrasts",
+          "extends",
+          "background",
+          "mentions"
+        ]
+      }
+    },
+    "required": [
+      "n",
+      "stance"
+    ],
+    "additionalProperties": false
+  }
+}

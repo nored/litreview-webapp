@@ -1,0 +1,12 @@
+{
+  "type": "array",
+  "items": {
+    "type": "object",
+    "properties": {
+      "n":      { "type": "integer", "minimum": 1 },
+      "stance": { "type": "string", "enum": ["supports", "contrasts", "extends", "background", "mentions"] }
+    },
+    "required": ["n", "stance"],
+    "additionalProperties": false
+  }
+}

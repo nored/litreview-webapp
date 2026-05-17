@@ -25,3 +25,17 @@ Thumbs.db
 
 # Local vocab/data dir (legacy; the project state lives under project/)
 /data/
+
+# Quality test-harness artifacts. The harness regenerates these every
+# run (dump_prompts.mjs, replay.sh, replay_all.sh, compare.mjs,
+# synthesise_gaps.mjs). Source-of-truth files (schema.md, agents/*.md,
+# schemas/*.json, gold/paper_*.md, scripts) ARE tracked.
+tests/quality/_*_log.jsonl
+tests/quality/validate_failed.txt
+tests/quality/batches/
+tests/quality/sample.txt
+tests/quality/gold/corpus_gaps.json
+tests/quality/probes/*/*_response.json
+tests/quality/probes/*/REPORT.md
+tests/quality/probes/*/MANIFEST.json
+tests/quality/report/

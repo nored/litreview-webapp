@@ -1,0 +1,31 @@
+You are an information extractor for a scientific literature review. You FIND verbatim quotes inside a research paper; you never paraphrase, summarise, or invent text.
+
+TASK: Find the exact statement claiming this paper is the FIRST to address or accomplish something. Look for phrases like "to the best of our knowledge, the first…", "we are the first to…", "no prior work has…". Otherwise [].
+
+Return each first-in-area claim.
+
+PARAGRAPHS:
+<paragraph id="012:p:0000" section="introduction" page="1">
+Vectors as a data representation method have gained popularity with large language models, reverse image searches, and recommendation systems (Li, 2023). Effectively, almost all types of data objects, such as text, images, and video, can be represented as vectors. This popularity stems from the inherent versatility of vectors, which allow complex data structures to be expressed in a mathematical form, enabling efficient processing and analysis (Taipalus, 2024). For example, in the realm of large language models, vectors serve as a fundamental representation of words, sentences, or entire documents, capturing semantic relationships and contextual information.
+</paragraph>
+<paragraph id="012:p:0001" section="introduction" page="1">
+Although vectors have been widely utilized in cyber security in contexts such as machine learning classification, vector database management systems (VDBMS) have emerged in the early 2020s as dedicated systems for managing vector data. Similarly to relational DBMSs, VDBMSs provide features that automate much of the work in managing data. Because both vectorization and DBMS features are relatively mature and well-understood, the relatively novel VDBMSs have quickly established themselves as trustworthy pieces of software used in various domains.
+</paragraph>
+<paragraph id="012:p:0002" section="introduction" page="1">
+The landscape of cybersecurity data has expanded considerably, mirroring the growth observed in other domains like large language models. Conventional frameworks and algorithms for vector management prove inadequate when confronted with the sheer magnitude of these datasets (Wang et al., 2021). In response to these challenges, vector databases have emerged as a superior alternative, demonstrating faster computational speed and richer features. These advancements in vector database technology address the limitations inherent in previous systems, particularly their ability to effectively handle the volume of information inherent in cybersecurity datasets.
+</paragraph>
+<paragraph id="012:p:0003" section="introduction" page="1">
+In this study, we describe vectors as means of representing different data objects such as emails, network traffic, and biometric image data, how VDBMSs facilitate vector data management, and most importantly, how VDBMSs can be utilized in various cyber security related use-cases such as biometric authentication and email phishing detection. We also provide examples of established Python libraries for data preprocessing, normalization, feature extraction, and vectorization. Notably, Python is not the only programming language with such libraries.
+</paragraph>
+<paragraph id="012:p:0004" section="introduction" page="1">
+The rest of the study is structured as follows. In the next section, we describe VDBMS fundamentals, features, and products, and in Section 3, we detail four VDBMS use cases in cyber security. Section 4 concludes the study.
+</paragraph>
+<paragraph id="012:p:0018" section="conclusion" page="5">
+Storing various data objects as feature vectors has gained popularity due to their computational efficiency in storing and comparing vectors. Additionally, VDBMSs have emerged as systems dedicated to automating tasks such as storing and indexing vectors, facilitating vector querying and query optimization, and database scalability and access control.
+</paragraph>
+<paragraph id="012:p:0019" section="conclusion" page="5">
+The strengths of VDBMS for cyber security are their efficiency in handling large and diverse datasets, providing rapid query response times, and being adept at recognizing non-exact matches. These systems' scalability, speed, and adaptability make them invaluable for cyber security, particularly in dynamic environments where extensive and varied data require quick and flexible analysis.
+</paragraph>
+<paragraph id="012:p:0020" section="conclusion" page="5">
+In this study, we showed through several examples how vector database management systems and various software libraries can be used in the domain of cyber security. In summary, we highlighted the use cases in user authentication, email phishing detection, anomaly detection, and network traffic analysis. However, as almost all data objects can be vectorized, the possibilities of utilizing vector data extend beyond the use cases presented in this study. This prompts further theoretical and applied research on VDBMSs, potentially resulting in interesting immediate applications in highly demanding cyber-security scenarios.
+</paragraph>

@@ -1,0 +1,15 @@
+{
+  "type": "array",
+  "items": {
+    "type": "object",
+    "properties": {
+      "metric":  { "type": "string", "minLength": 1 },
+      "value":   { "type": "number" },
+      "dataset": { "type": ["string", "null"] },
+      "split":   { "type": ["string", "null"], "enum": ["train", "val", "test", null] },
+      "quote":   { "type": "string", "minLength": 8 }
+    },
+    "required": ["metric", "value", "quote"],
+    "additionalProperties": false
+  }
+}

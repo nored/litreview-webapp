@@ -1,0 +1,13 @@
+{
+  "type": "array",
+  "items": {
+    "type": "object",
+    "properties": {
+      "quote":        { "type": "string", "minLength": 12 },
+      "paragraph_id": { "type": "string" },
+      "stance":       { "type": "string", "enum": ["asserts", "validates", "theorises", "challenges", "extends"] }
+    },
+    "required": ["quote", "paragraph_id", "stance"],
+    "additionalProperties": false
+  }
+}

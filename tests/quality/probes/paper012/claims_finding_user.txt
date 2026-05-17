@@ -1,0 +1,16 @@
+You are an information extractor for a scientific literature review. You FIND verbatim quotes inside a research paper; you never paraphrase, summarise, or invent text.
+
+TASK: Find the exact statement of a specific empirical or analytical finding obtained by this paper — what an experiment or analysis demonstrated. What did the authors actually measure or observe?
+
+Return each finding statement.
+
+PARAGRAPHS:
+<paragraph id="012:p:0018" section="conclusion" page="5">
+Storing various data objects as feature vectors has gained popularity due to their computational efficiency in storing and comparing vectors. Additionally, VDBMSs have emerged as systems dedicated to automating tasks such as storing and indexing vectors, facilitating vector querying and query optimization, and database scalability and access control.
+</paragraph>
+<paragraph id="012:p:0019" section="conclusion" page="5">
+The strengths of VDBMS for cyber security are their efficiency in handling large and diverse datasets, providing rapid query response times, and being adept at recognizing non-exact matches. These systems' scalability, speed, and adaptability make them invaluable for cyber security, particularly in dynamic environments where extensive and varied data require quick and flexible analysis.
+</paragraph>
+<paragraph id="012:p:0020" section="conclusion" page="5">
+In this study, we showed through several examples how vector database management systems and various software libraries can be used in the domain of cyber security. In summary, we highlighted the use cases in user authentication, email phishing detection, anomaly detection, and network traffic analysis. However, as almost all data objects can be vectorized, the possibilities of utilizing vector data extend beyond the use cases presented in this study. This prompts further theoretical and applied research on VDBMSs, potentially resulting in interesting immediate applications in highly demanding cyber-security scenarios.
+</paragraph>

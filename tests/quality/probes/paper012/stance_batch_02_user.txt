@@ -1,0 +1,43 @@
+You apply five surface-pattern rules to short citation contexts and output a label per context. You are a pattern matcher, scanning the words around each citation for specific surface cues. Do not interpret what the sentence means and do not weigh which category sounds most substantive, only match surface patterns.
+
+TASK: For each numbered citation context, output one entry containing the context number "n" and a label "stance" from the values below. Return exactly one entry per context, in the same order as the input.
+
+PROCEDURE for each context:
+  1. Locate the TARGET citation. The target citation is wrapped in double angle brackets like `<<(Author, Year)>>` or `<<(Author et al., Year)>>`. If a sentence contains multiple citations, ONLY the one wrapped in << >> is the target — any other citations in the same sentence are background context and not what you are classifying. If a sentence has only one citation, those brackets surround that single citation.
+  2. Inspect the three words immediately before the opening << and the three words immediately after the closing >>. This adjacency window is what the rules check.
+  3. Apply the five rules below in priority order. Stop at the first rule that matches the surface pattern.
+  4. Output the entry. Do not justify, do not explain, do not output prose.
+
+PRIOR ON EXPECTED DISTRIBUTION. In typical literature-review prose, citations break down roughly as follows: mentions around half of all citations, background around a third, supports under ten percent, extends and contrasts rare. If your output contains more than a third supports, you are over-firing supports and the surface-pattern adjacency check is failing.
+
+ANTI-DEFAULT REMINDER. Supports is not a fallback for any factual-sounding sentence with a citation at the end. The dominant failure mode in this task is treating any non-trivial assertion as supports. Most citations in this corpus are mentions (tool and library attribution) or background (definitional and field-level teaching). Before assigning supports, verify that a quantified marker, a named experimental finding, or an explicit reliance verb sits within three words of the citation. If no such marker is adjacent, the citation is not supports.
+
+Stance values, applied in priority order, first match wins. Each rule is a surface-pattern test, evaluate the patterns visually rather than reasoning about what the sentence means:
+
+  - mentions:   the citation appears in parentheses immediately after a capitalized name of a software library, tool, dataset, model, product, or named technique (pattern: "Name (Cite)"), or the citation sits inside an enumeration introduced by "such as", "including", "e.g.,", "for example", "cf.", or appears inside a comma-separated list of named techniques or tools. Whenever this surface pattern is present, classify as mentions, do not evaluate the surrounding sentence for claims or contrasts.
+
+  - extends:    a build-on verb sits within three words of the citation and takes it as object (pattern: "we extend (Cite)", "based on (Cite)", "we adapt (Cite)", "building on the method of (Cite)", "starting from (Cite)", "we follow (Cite)", "we port (Cite)"). Sentence-level build-on vocabulary that is not adjacent to the citation does not trigger this stance.
+
+  - contrasts:  a limitation verb or contrast cue sits within three words of the citation and applies to the cited work (pattern: "(Cite) fails to", "(Cite) is limited by", "(Cite) does not", "however, (Cite)", "in contrast to (Cite)", "X is refuted by (Cite)"). Sentence-level contrast vocabulary that is not adjacent to the citation does not trigger this stance, including phrases like "contrary to X" or "X proves inadequate" when the citation sits at the end of the sentence away from the cue.
+
+  - supports:   a quantified result, named experimental finding, or explicit reliance verb sits within three words of the citation (pattern: "achieves 95% (Cite)", "we use the result of (Cite)", "as shown by (Cite)", "as demonstrated in (Cite)", "according to (Cite)", "the finding that X (Cite)"). A bare factual-sounding statement followed by a citation at the end of the sentence does not trigger this stance.
+
+  - background: none of the above surface patterns are present and the citation provides authority for a definitional, historical, conceptual, or field-level statement. This is the placement for sentences that explain, summarise, define, or contextualise a topic or concept and cite a reference for that teaching.
+
+Anti-default rules:
+  - mentions wins on the artifact pattern: tool and library enumerations always go to mentions even when the surrounding sentence reads pedagogically. The pattern "Python libraries such as X (Cite), Y (Cite), Z (Cite)" is mentions for all three citations.
+  - adjacency means within three words of the citation or inside the same clause as the citation. Cues that appear earlier in the sentence and are separated from the citation by other content do not count for contrasts, extends, or supports.
+  - supports is not a fallback for any factual-sounding sentence. A factual statement followed by a parenthetical citation goes to background unless an adjacent quantified marker or reliance verb is present.
+  - contrasts is not triggered by sentence-level contrast vocabulary. A sentence that contrasts two entities and cites a third work does not qualify as contrasts.
+  - when in doubt between supports and background, choose background. When in doubt between supports and mentions and a named artifact appears anywhere near the citation, choose mentions.
+
+CONTEXTS:
+[1] By scrutinizing patterns, protocols, and communication flows, it is possible to detect attacks such as distributed denial-of-service (e.g., <<Lopez et al., 2019)>> and intrusions (e.g., Gao et al., 2020).
+
+[2] By scrutinizing patterns, protocols, and communication flows, it is possible to detect attacks such as distributed denial-of-service (e.g., Lopez et al., 2019) and intrusions (e.g., <<Gao et al., 2020)>>.
+
+[3] By using tools such as Wireshark, tcpdump, or Scapy <<(Rohith, Moharir & Shobha, 2018)>>, extract relevant data from raw network packages such as IP addresses, ports, protocols, and packet sizes and convert them into feature vectors.
+
+[4] For example, approaches such as those of <<Liu et al. (2017)>> could natively vectorize network traffic, even in encrypted traffic.
+
+[5] Again, once the feature vectors have been stored in a VDBMS, network traffic should be continuously vectorized and compared with the existing vectors in the database <<(Iglesias & Zseby, 2015)>>.
