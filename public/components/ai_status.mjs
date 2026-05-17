@@ -1,6 +1,6 @@
 // Topbar AI helper: status pill + modal that lets the student pick a
 // provider and configure it.
-//   Local (WebLLM)        — runs in browser, no key, slowest
+//   Local (WebLLM)        — Node-side llama.cpp; user picks the model
 //   OpenAI-compatible     — proxied through server (Ollama, OpenAI, …)
 //   Anthropic Claude      — proxied through server
 
@@ -19,13 +19,9 @@ export function mountAiStatus(rootEl) {
   rootEl.appendChild(button);
   llm.subscribe(refresh);
   llm.refreshRemoteConfig();
+  llm.refreshLocalRegistry();
+  llm.refreshLocalStatus();
   refresh();
-
-  // Auto-load WebLLM if that's the active provider and we have a saved choice.
-  const auto = llm.getAutoLoadPref();
-  if (llm.getProvider() === 'webllm' && auto && llm.isWebGPUAvailable() && !llm.status().loaded) {
-    llm.loadModel(auto).catch((err) => console.warn('auto-load failed:', err.message));
-  }
 
   function refresh() {
     const s = llm.status();
@@ -99,21 +95,15 @@ export function mountAiStatus(rootEl) {
     );
   }
 
-  // ---- WebLLM panel (existing flow) ----
+  // ---- Local-LLM panel (server-side llama.cpp) ----
   function renderWebllmPanel() {
     const s = llm.status();
     const wrap = h('div', { class: 'provider-panel' });
 
-    if (!s.available) {
-      wrap.appendChild(h('p', { class: 'muted' }, [
-        'WebGPU is not available in this browser. Try Chrome, Edge, or Safari Technology Preview, ',
-        'or use a remote provider in the other tabs.',
-      ]));
-      return wrap;
-    }
-
     wrap.appendChild(h('p', { class: 'muted small' }, [
-      'Runs entirely in your browser. First load downloads weights (cached after).',
+      'Runs on the server (Node + llama.cpp, GPU-accelerated). First selection of a model downloads weights to ',
+      h('code', {}, ['project/data/_models/']),
+      ', cached after. The chosen model survives server restart.',
     ]));
 
     if (s.loading) {
@@ -122,41 +112,32 @@ export function mountAiStatus(rootEl) {
         h('div', { class: 'progress-bar', style: { width: `${pct}%` } }),
       ]));
       wrap.appendChild(h('p', { class: 'muted small' }, [s.progress?.text ?? 'starting…']));
-      return wrap;
     }
 
     if (s.error) wrap.appendChild(h('p', { class: 'error-text small' }, [`Error: ${s.error}`]));
 
+    const registry = llm.getLocalRegistry();
+    if (registry.length === 0) {
+      wrap.appendChild(h('p', { class: 'muted small' }, ['Loading model registry…']));
+      llm.refreshLocalRegistry();
+      return wrap;
+    }
     const list = h('ul', { class: 'model-list' });
-    for (const m of llm.WEBLLM_MODELS) {
+    for (const m of registry) {
       const isActive = s.loaded && s.modelId === m.id;
       list.appendChild(h('li', { class: 'model-row' + (isActive ? ' active' : '') }, [
         h('div', { class: 'model-meta' }, [
           h('div', { class: 'model-name' }, [m.label]),
-          h('div', { class: 'model-note muted small' }, [`${m.size} · ${m.note}`]),
+          h('div', { class: 'model-note muted small' }, [`~${m.size_gb} GB · ${m.speed} · ${m.description}`]),
         ]),
         h('button', {
           class: 'btn ' + (isActive ? '' : 'btn-primary'),
-          disabled: isActive,
-          onclick: async () => { try { await llm.loadModel(m.id); } catch (e) { console.error(e); } },
+          disabled: isActive || s.loading,
+          onclick: async () => { try { await llm.selectLocalModel(m.id); } catch (e) { console.error(e); } },
         }, [isActive ? 'active' : (s.loaded ? 'switch' : 'load')]),
       ]));
     }
     wrap.appendChild(list);
-
-    const auto = llm.getAutoLoadPref();
-    wrap.appendChild(h('div', { class: 'auto-load-row' }, [
-      h('label', { class: 'small muted' }, [
-        h('input', {
-          type: 'checkbox', checked: !!auto,
-          onchange: (e) => {
-            if (e.target.checked) { if (s.modelId) llm.setAutoLoadPref(s.modelId); }
-            else llm.clearAutoLoadPref();
-          },
-        }),
-        ' Auto-load on every page open',
-      ]),
-    ]));
     return wrap;
   }
 

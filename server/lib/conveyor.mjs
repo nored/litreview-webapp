@@ -174,15 +174,17 @@ export async function pickNext() {
   // Compose the action label/detail from whichever sub-state is biggest:
   // missing > draft > "review existing".
   let drLabel, drDetail;
+  // Labels reflect the v2 structured-data flow: per-paper extraction
+  // produces typed fields with provenance.
   if (eligibleNoNote > 0) {
-    drLabel = `Draft ${eligibleNoNote} missing notes`;
-    drDetail = `${eligibleNoNote.toLocaleString()} eligible paper${eligibleNoNote === 1 ? '' : 's'} ${eligibleNoNote === 1 ? 'has' : 'have'} no note yet. The AI drafts every section in parallel using RAG over the PDF chunks. Toggle "Audit & revise" for the critic pass.`;
+    drLabel = `Extract ${eligibleNoNote} papers`;
+    drDetail = `${eligibleNoNote.toLocaleString()} eligible paper${eligibleNoNote === 1 ? '' : 's'} ${eligibleNoNote === 1 ? 'has' : 'have'} no structured extraction yet. The pipeline runs regex + classifiers + LLM-as-finder per paper; every field carries provenance. Open the paper in Stage 4 v2 and hit "Re-extract structured fields".`;
   } else if (eligibleDraft > 0) {
-    drLabel = `Polish ${eligibleDraft} invalid notes`;
-    drDetail = `${eligibleDraft.toLocaleString()} note${eligibleDraft === 1 ? '' : 's'} ${eligibleDraft === 1 ? 'has' : 'have'} validation issues (missing required fields, schema mismatches). Polish them before synthesis.`;
+    drLabel = `Polish ${eligibleDraft} papers`;
+    drDetail = `${eligibleDraft.toLocaleString()} extracted record${eligibleDraft === 1 ? '' : 's'} ${eligibleDraft === 1 ? 'has' : 'have'} validation issues (missing required fields). Click into the paper to review and correct fields inline.`;
   } else {
     drLabel = 'Open deep read';
-    drDetail = 'Each paper gets a structured note. The AI drafts; you polish.';
+    drDetail = 'Each paper produces a structured record (typed fields, named entities, results, claims) with full provenance. The pipeline runs locally; you correct.';
   }
 
   events.push({

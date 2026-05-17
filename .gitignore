@@ -22,3 +22,6 @@ Thumbs.db
 *.log
 .env
 .env.local
+
+# Local vocab/data dir (legacy; the project state lives under project/)
+/data/

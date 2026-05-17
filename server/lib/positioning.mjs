@@ -65,12 +65,46 @@ export async function computePrismaNumbers() {
     }
   }
 
-  // 5. Notes written (= eligible for synthesis)
+  // 5. Notes written = papers that have substantive structured
+  // extraction. "Substantive" means ≥3 distinct field types beyond just
+  // category / method_family (topic_enums alone is too weak to count as
+  // synthesised). On fresh projects without v2 data, fall back to the
+  // legacy markdown notes count.
   let notesWritten = 0;
   try {
-    const files = await fs.readdir(NOTES_DIR);
-    notesWritten = files.filter((f) => /^paper_\d+\.md$/.test(f)).length;
-  } catch { /* dir missing */ }
+    const store = await import('./store.mjs');
+    await store.init();
+    // For each eligible paper, count distinct paper_field.field_name
+    // (excluding topic_enums) plus presence of named-entity / results
+    // / claims rows. Count the paper as synthesised if ≥3 dimensions.
+    const r = store.query(
+      `SELECT p.paper_id,
+              (SELECT COUNT(DISTINCT field_name) FROM paper_field
+                WHERE paper_id = p.paper_id
+                  AND field_name NOT IN ('category', 'method_family')) AS field_count,
+              (SELECT COUNT(DISTINCT kind) FROM name_usage WHERE paper_id = p.paper_id) AS name_kinds,
+              (SELECT COUNT(*) FROM results WHERE paper_id = p.paper_id) AS results_count,
+              (SELECT COUNT(*) FROM claims  WHERE paper_id = p.paper_id) AS claims_count
+         FROM papers p
+        WHERE p.triage_label IN ('include','maybe')`,
+    );
+    for (const row of r) {
+      const dimensions = (row.field_count > 0 ? 1 : 0)
+        + (row.name_kinds   > 0 ? 1 : 0)
+        + (row.results_count > 0 ? 1 : 0)
+        + (row.claims_count  > 0 ? 1 : 0);
+      // Two of {paper_field rows beyond topic enums, named entities,
+      // results, claims} are enough — pragmatic threshold for "we got
+      // something real out of this paper".
+      if (dimensions >= 2 || row.field_count >= 3) notesWritten++;
+    }
+  } catch { /* store unavailable; fall back below */ }
+  if (notesWritten === 0) {
+    try {
+      const files = await fs.readdir(NOTES_DIR);
+      notesWritten = files.filter((f) => /^paper_\d+\.md$/.test(f)).length;
+    } catch { /* dir missing */ }
+  }
 
   // Top exclusion reasons by count, capped at 5
   const topExclusionReasons = Object.entries(exclusionReasons)

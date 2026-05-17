@@ -14,11 +14,13 @@ import { renderSetup } from './views/setup.mjs';
 import { renderStage1 } from './views/stage1.mjs';
 import { renderStage2 } from './views/stage2.mjs';
 import { renderStage3 } from './views/stage3.mjs';
-import { renderStage4 } from './views/stage4.mjs';
-import { renderStage5 } from './views/stage5.mjs';
-import { renderStage7 } from './views/stage7.mjs';
+import { renderDeepReadV2 } from './views/deep_read_v2.mjs';
+import { renderCorpusShapeV2 } from './views/corpus_shape_v2.mjs';
+import { renderPositioningV2 } from './views/positioning_v2.mjs';
 import { renderStage8 } from './views/stage8.mjs';
+import { renderStructured } from './views/structured.mjs';
 import { mountAiStatus } from './components/ai_status.mjs';
+import { renderStageRail } from './components/stage_rail.mjs';
 
 const ROUTES = {
   '#/':       () => renderConveyor(viewEl),
@@ -26,11 +28,12 @@ const ROUTES = {
   '#/stage1': () => renderStage1(viewEl),
   '#/stage2': () => renderStage2(viewEl),
   '#/stage3': () => renderStage3(viewEl),
-  '#/stage4': () => renderStage4(viewEl),
-  '#/stage5': () => renderStage5(viewEl),
+  '#/stage4': () => renderDeepReadV2(viewEl),
+  '#/stage5': () => renderCorpusShapeV2(viewEl),
   '#/stage6': () => { location.hash = '#/stage5'; return null; },
-  '#/stage7': () => renderStage7(viewEl),
+  '#/stage7': () => renderPositioningV2(viewEl),
   '#/stage8': () => renderStage8(viewEl),
+  '#/structured': () => renderStructured(viewEl),
 };
 
 const viewEl = document.getElementById('view');
@@ -93,21 +96,8 @@ const TITLES = {
   '#/stage5': '5. Corpus shape',
   '#/stage7': '6. Positioning & catalogue',
   '#/stage8': '7. Loop close',
+  '#/structured': 'Structured data (v2)',
 };
-
-// Linear stage order. Used to render the "next stage" strip at the
-// bottom of every non-overview view. The top strip always goes back to
-// overview (`#/`), so we don't need a prev mapping — the overview is
-// the natural anchor.
-const STAGE_ORDER = [
-  '#/setup', '#/stage1', '#/stage2', '#/stage3', '#/stage4',
-  '#/stage5', '#/stage7', '#/stage8',
-];
-function nextStage(route) {
-  const i = STAGE_ORDER.indexOf(route);
-  if (i < 0) return null;
-  return STAGE_ORDER[i + 1] || null; // null = no next; we'll send back to overview
-}
 
 function activateNav() {
   const route = location.hash || '#/';
@@ -138,43 +128,17 @@ async function render() {
   const result = await handler();
   if (typeof result === 'function') currentCleanup = result;
   refreshSidebarStatus();
-  applyOverviewVisibility();
-  injectStageNavStrips(route);
+  refreshStageRail();
 }
 
-// Top + bottom navigation strips for stage views. The top strip is
-// always "↑ Back to overview" — the overview is the canonical anchor.
-// The bottom strip points at the next stage in linear order, or back
-// to the overview if there is no next stage. Both strips briefly pulse
-// on mount as a hint that they're clickable (one-shot CSS animation).
-function injectStageNavStrips(route) {
-  if (!route || route === '#/') return;
-  const next = nextStage(route);
-  const nextHref = next || '#/';
-  const nextLabel = next ? `Next: ${TITLES[next] || next}` : '✓ Done — back to overview';
-
-  // Top: back to overview.
-  const top = document.createElement('a');
-  top.href = '#/';
-  top.className = 'stage-nav-strip stage-nav-top';
-  top.innerHTML = `<span class="stage-nav-arrow">↑</span><span>Back to overview</span>`;
-
-  // Bottom: next stage (or back to overview when done).
-  const bottom = document.createElement('a');
-  bottom.href = nextHref;
-  bottom.className = 'stage-nav-strip stage-nav-bottom';
-  bottom.innerHTML = `<span>${nextLabel}</span><span class="stage-nav-arrow">↓</span>`;
-
-  viewEl.insertBefore(top, viewEl.firstChild);
-  viewEl.appendChild(bottom);
+// The persistent stage rail under the topbar re-renders on every route
+// change so its "active" highlight follows the current page and its
+// status icons reflect the latest pipeline state. Errors are swallowed
+// in the component itself.
+const stageRailEl = document.getElementById('stage-rail');
+function refreshStageRail() {
+  if (stageRailEl) renderStageRail(stageRailEl).catch(() => {});
 }
-
-// Note: the topbar "← Overview" button was removed once stage views
-// gained their own top/bottom navigation strips. The brand text in the
-// header stays a home link as a quiet fallback. Keeping these stubs so
-// the existing call sites don't need to change.
-function mountOverviewLink() { /* no-op — strips replace this */ }
-function applyOverviewVisibility() { /* no-op */ }
 
 // Topbar "Advanced view" toggle. Mounted on DOMContentLoaded.
 function mountAdvancedToggle() {
@@ -198,9 +162,9 @@ window.addEventListener('DOMContentLoaded', () => {
   applyAdvancedMode();
   const aiSlot = document.querySelector('.topbar-actions');
   if (aiSlot) mountAiStatus(aiSlot);
-  mountOverviewLink();
   mountAdvancedToggle();
   refreshSidebarStatus();
+  refreshStageRail();
   render();
 });
 

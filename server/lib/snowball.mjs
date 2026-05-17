@@ -181,7 +181,7 @@ export function workToCandidate(work, sourceQuery = 'snowball') {
     work.host_venue?.display_name ||
     work.locations?.[0]?.source?.display_name ||
     '';
-  const oa = work.best_oa_location || {};
+  const arxivId = extractArxivId(work);
   return {
     title: work.title || '',
     authors: authors.join(', '),
@@ -189,12 +189,40 @@ export function workToCandidate(work, sourceQuery = 'snowball') {
     venue,
     abstract: reconstructInverted(work.abstract_inverted_index),
     doi: doi || '',
-    arxiv_id: extractArxivId(work),
+    arxiv_id: arxivId,
     url: work.id || '',
-    pdf_url: oa.pdf_url || oa.landing_page_url || '',
+    pdf_url: bestPdfUrl(work, arxivId, doi),
     source_database: 'openalex',
     source_query: sourceQuery,
   };
+}
+
+// Pick the best downloadable URL for a snowballed work. OpenAlex has
+// best_oa_location (one preferred OA copy), primary_location (publisher
+// or repo), and a wider locations[] array. Best_oa_location alone often
+// comes back null even when arXiv has a PDF, so we walk through every
+// candidate in priority order. Final fallbacks: arXiv abstract URL,
+// then a DOI-resolved URL so the downloader has at least something to
+// try.
+function bestPdfUrl(work, arxivId, doi) {
+  const oaBest = work.best_oa_location || {};
+  if (oaBest.pdf_url) return oaBest.pdf_url;
+  const prim = work.primary_location || {};
+  if (prim.pdf_url) return prim.pdf_url;
+  for (const loc of work.locations || []) {
+    if (loc?.pdf_url) return loc.pdf_url;
+  }
+  // No direct PDF URL. Try landing pages in the same order.
+  if (oaBest.landing_page_url) return oaBest.landing_page_url;
+  if (prim.landing_page_url) return prim.landing_page_url;
+  for (const loc of work.locations || []) {
+    if (loc?.landing_page_url) return loc.landing_page_url;
+  }
+  // Last-resort constructed URLs. Prefer arXiv since the downloader
+  // handles its PDFs directly; doi.org is a redirect-only fallback.
+  if (arxivId) return `https://arxiv.org/abs/${arxivId}`;
+  if (doi) return `https://doi.org/${doi}`;
+  return '';
 }
 
 function extractArxivId(work) {

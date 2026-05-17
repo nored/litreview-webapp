@@ -32,6 +32,12 @@ function serialize(fn) {
   writeChain = next.catch(() => {});
   return next;
 }
+// Exported so other modules that mutate the same CSV (snowball,
+// import, reset) can share the lock. Concurrent writes to
+// candidates_triaged.csv would race: snowball's append + trainer's
+// setDecision both do read-modify-write, and the loser truncates the
+// winner's changes.
+export const csvLock = serialize;
 
 async function readMeta() {
   try {
@@ -77,15 +83,38 @@ async function loadTriagedRows() {
 }
 
 async function persistTriagedRows(rowsWithIndex) {
-  // Re-assign paper_id sequentially over include+maybe rows.
-  let next = 1;
+  // Assign paper_id ONCE per row and never renumber. The download
+  // daemon names PDFs `paper_NNN.pdf` at download time; if paper_ids
+  // shuffled on every save (the old behaviour, which renumbered all
+  // include+maybe rows sequentially), file `paper_001.pdf` would drift
+  // to point at a different row over time and the Deep Read PDF viewer
+  // would show the wrong document.
+  //
+  // Rules:
+  //   - Existing paper_id stays. Even if the row is later excluded —
+  //     its PDF on disk keeps its name; the row is just hidden from
+  //     include/maybe filters.
+  //   - A row gets a new paper_id only when first transitioning to
+  //     include or maybe AND it doesn't have one already.
+  //   - Next id picks the smallest unused 3-digit number.
+  const used = new Set();
   for (const r of rowsWithIndex) {
-    if (r.triage_label === 'include' || r.triage_label === 'maybe') {
-      r.paper_id = String(next).padStart(3, '0');
-      next++;
-    } else {
-      r.paper_id = '';
+    if (r.paper_id) used.add(String(r.paper_id));
+  }
+  let nextId = 1;
+  function takeNextId() {
+    while (used.has(String(nextId).padStart(3, '0'))) nextId++;
+    const id = String(nextId).padStart(3, '0');
+    used.add(id);
+    nextId++;
+    return id;
+  }
+  for (const r of rowsWithIndex) {
+    const wantsId = r.triage_label === 'include' || r.triage_label === 'maybe';
+    if (wantsId && !r.paper_id) {
+      r.paper_id = takeNextId();
     }
+    // Never clear an existing paper_id. The PDF on disk would orphan.
   }
   // Strip row_index for CSV output.
   const csvRows = rowsWithIndex.map(({ row_index: _, ...rest }) => rest);
@@ -106,6 +135,46 @@ export async function getAll() {
   }));
 }
 
+// Bulk-apply multiple decisions in a single CSV read+write cycle.
+// setDecision rewrites the whole CSV on every call; a 500-decision
+// auto-apply pass over a 2400-row CSV would otherwise rewrite ~1M rows
+// of disk I/O. This batches them: one read, in-memory mutations, one
+// write. Skips rows that already have a non-empty label (caller already
+// decided manually). Returns { applied, skipped, errors, paper_ids }
+// where paper_ids is the list of paper_ids that were assigned/preserved
+// for the applied include/maybe rows (so the caller can enqueue them
+// for download in one pass).
+export async function setDecisionsBatch(decisions) {
+  return serialize(async () => {
+    const rows = await loadTriagedRows();
+    const byIndex = new Map(rows.map((r, i) => [i, r]));
+    let applied = 0;
+    let skipped = 0;
+    const errors = [];
+    const paperIds = [];
+    for (const d of decisions) {
+      const idx = Number(d.row_index);
+      const row = byIndex.get(idx);
+      if (!row) { errors.push({ row_index: idx, error: 'row not found' }); continue; }
+      if (!VALID_LABELS.has(d.label)) { errors.push({ row_index: idx, error: `invalid label: ${d.label}` }); continue; }
+      if (row.triage_label && row.triage_label !== '') { skipped++; continue; }
+      row.triage_label = d.label;
+      row.triage_reason = d.reason ?? '';
+      applied++;
+    }
+    // persistTriagedRows assigns paper_ids for new include/maybe rows.
+    await persistTriagedRows(rows);
+    // Re-collect paper_ids after persist (assignment may have happened).
+    for (const d of decisions) {
+      const row = byIndex.get(Number(d.row_index));
+      if (row && row.paper_id && (d.label === 'include' || d.label === 'maybe')) {
+        paperIds.push(row.paper_id);
+      }
+    }
+    return { applied, skipped, errors, paper_ids: paperIds };
+  });
+}
+
 export async function setDecision({ row_index, label, reason }) {
   if (!VALID_LABELS.has(label)) {
     throw new Error(`invalid label: ${label}`);
@@ -114,7 +183,12 @@ export async function setDecision({ row_index, label, reason }) {
     const rows = await loadTriagedRows();
     const idx = Number(row_index);
     if (!Number.isInteger(idx) || idx < 0 || idx >= rows.length) {
-      throw new Error(`row_index ${idx} out of range`);
+      // Soft-fail: the row is gone (likely the CSV was rewritten by a
+      // racing snowball append, or the picker's metadata is stale).
+      // Return a no-op result instead of throwing so a single bad
+      // row_index doesn't break the whole training step. Caller can
+      // log the skip and re-pick a fresh paper.
+      return { row_index: idx, skipped: true, reason: `row_index ${idx} out of range (csv has ${rows.length} rows)` };
     }
     rows[idx].triage_label = label;
     rows[idx].triage_reason = reason ?? '';

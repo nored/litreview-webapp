@@ -1,21 +1,37 @@
 {
   "name": "litreview-webapp",
-  "version": "0.1.0",
-  "description": "Web app for the thesis literature review pipeline. Local-first, runs on Node.",
+  "version": "2.0.0",
+  "description": "Local-first web app for structured analysis over a research-domain corpus. Builds gap reports and evidence-grounded positioning artefacts. Runs on Node.",
   "type": "module",
   "main": "server/index.mjs",
   "scripts": {
     "start": "node server/index.mjs",
-    "dev": "node --watch server/index.mjs"
+    "dev": "node --watch server/index.mjs",
+    "quality:pick": "node tests/quality/pick_sample.mjs",
+    "quality:split": "node tests/quality/split_batches.mjs",
+    "quality:validate": "node tests/quality/validate_notes.mjs",
+    "quality:compare": "node tests/quality/compare.mjs",
+    "quality:prep": "node tests/quality/pick_sample.mjs && node tests/quality/split_batches.mjs",
+    "quality:score": "node tests/quality/validate_notes.mjs && node tests/quality/compare.mjs"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
+    "@huggingface/hub": "^1.0.0",
     "@huggingface/transformers": "^3.0.0",
     "express": "^4.21.0",
     "fast-xml-parser": "^4.5.0",
+    "gliner": "^0.0.19",
+    "grobid-js": "file:../grobid-js",
+    "node-llama-cpp": "^3.18.1",
     "pdfjs-dist": "^5.7.284",
+    "sql.js": "^1.14.1",
     "yaml": "^2.6.0"
+  },
+  "overrides": {
+    "onnxruntime-node": "1.21.0",
+    "onnxruntime-common": "1.21.0",
+    "onnxruntime-web": "1.21.0"
   }
 }

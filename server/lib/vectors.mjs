@@ -27,12 +27,56 @@ import * as U from './sbert_utils.mjs';
 // ---------------------------------------------------------------------------
 
 const VECTORS_DIR = path.join(DATA_DIR, '_vectors');
+const META_FILE = path.join(VECTORS_DIR, '_meta.json');
 
 function fileFor(kind) {
   if (!/^[a-z][a-z0-9_]*$/.test(kind)) {
     throw new Error(`vectors: invalid kind '${kind}' (use snake_case)`);
   }
   return path.join(VECTORS_DIR, `${kind}.jsonl`);
+}
+
+// ---------------------------------------------------------------------------
+// Embedder-model identity stamp
+// ---------------------------------------------------------------------------
+//
+// Records which embedder model + dtype produced the vectors on disk.
+// Cross-model and cross-dtype vectors are not directly comparable (cosine
+// scores shift), so the caller is warned on mismatch. We don't auto-wipe
+// — that would silently destroy work — we surface the mismatch and let
+// the caller decide.
+
+/** Read the embedder-model stamp. Returns null when no vectors written yet. */
+export async function readEmbedderStamp() {
+  try {
+    const text = await fs.readFile(META_FILE, 'utf8');
+    return JSON.parse(text);
+  } catch (e) {
+    if (e.code === 'ENOENT') return null;
+    throw e;
+  }
+}
+
+/** Write the embedder-model stamp. Called from persistStore. */
+async function writeEmbedderStamp(stamp) {
+  await fs.mkdir(VECTORS_DIR, { recursive: true });
+  await fs.writeFile(META_FILE, JSON.stringify(stamp, null, 2));
+}
+
+/**
+ * Compare the current embedder's identity against the on-disk stamp.
+ * Returns { stamped, current, match, dim_match } — `stamped` is null
+ * when no vectors have been written yet (fresh project).
+ */
+export async function checkEmbedderCompatibility(currentModel, currentDtype, currentDim) {
+  const stamped = await readEmbedderStamp();
+  if (!stamped) return { stamped: null, current: { model: currentModel, dtype: currentDtype, dim: currentDim }, match: true, dim_match: true };
+  return {
+    stamped,
+    current: { model: currentModel, dtype: currentDtype, dim: currentDim },
+    match: stamped.model === currentModel && stamped.dtype === currentDtype && stamped.dim === currentDim,
+    dim_match: stamped.dim === currentDim,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -56,6 +100,36 @@ function withLock(kind, fn) {
 // ---------------------------------------------------------------------------
 // Load / persist
 // ---------------------------------------------------------------------------
+
+// Track the (stamped-identity, current-identity) pair we last warned
+// about. Re-warns when either side changes mid-process — e.g. user
+// imports a fp16-stamped archive into a fp32-running server, then
+// later swaps LITREVIEW_EMBED_DTYPE.
+let _lastWarnedKey = null;
+
+async function maybeWarnOnStampDrift() {
+  try {
+    const stamped = await readEmbedderStamp();
+    if (!stamped) return;
+    const embedderMod = await import('./embedder.mjs');
+    if (stamped.model === embedderMod.MODEL && stamped.dtype === embedderMod.DTYPE_IN_USE) return;
+    const key = `${stamped.model}@${stamped.dtype}#${stamped.dim} → ${embedderMod.MODEL}@${embedderMod.DTYPE_IN_USE}#${embedderMod.DIMENSIONS}`;
+    if (key === _lastWarnedKey) return;
+    if (stamped.dim !== embedderMod.DIMENSIONS) {
+      console.warn(
+        `vectors: dim mismatch (stamped ${stamped.dim} vs current ${embedderMod.DIMENSIONS}); ` +
+        `clear _vectors/ before swapping embedding models`,
+      );
+    } else {
+      console.warn(
+        `vectors: embedder identity drift — stamped {model: ${stamped.model}, dtype: ${stamped.dtype}}, ` +
+        `current {model: ${embedderMod.MODEL}, dtype: ${embedderMod.DTYPE_IN_USE}}. ` +
+        `Vectors will be written with the new identity from here on.`,
+      );
+    }
+    _lastWarnedKey = key;
+  } catch { /* best-effort */ }
+}
 
 async function loadStore(kind) {
   if (stores.has(kind)) return stores.get(kind);
@@ -112,6 +186,19 @@ async function persistStore(kind) {
   const tmp = file + '.tmp';
   await fs.writeFile(tmp, lines.length ? lines.join('\n') + '\n' : '');
   await fs.rename(tmp, file);
+  // Stamp the embedder identity if we know it. The store knows the dim;
+  // the embedder module is the source of truth for model + dtype, so we
+  // import it lazily to avoid a circular dep.
+  try {
+    const embedderMod = await import('./embedder.mjs');
+    const stamp = {
+      model: embedderMod.MODEL,
+      dtype: embedderMod.DTYPE_IN_USE,
+      dim: store.dim,
+      written_at: new Date().toISOString(),
+    };
+    await writeEmbedderStamp(stamp);
+  } catch { /* embedder not available — fresh write only */ }
 }
 
 function asFloat32(embedding) {
@@ -136,6 +223,7 @@ function checkDim(store, dim) {
 
 export async function upsert(kind, id, embedding, meta = {}, hash = null) {
   return withLock(kind, async () => {
+    await maybeWarnOnStampDrift();
     const store = await loadStore(kind);
     const e = asFloat32(embedding);
     checkDim(store, e.length);

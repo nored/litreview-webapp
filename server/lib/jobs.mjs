@@ -12,14 +12,28 @@ const DOWNLOAD_JOB_FILE = path.join(JOBS_DIR, 'download.json');
 const EMBED_JOB_FILE = path.join(JOBS_DIR, 'embed.json');
 const SNOWBALL_JOB_FILE = path.join(JOBS_DIR, 'snowball.json');
 
-export async function readSearchJob() {
+// Job files can be left in a zero-byte / partially-written state after a
+// crash or kill. A SyntaxError reading them must not crash boot — just
+// treat the file as absent and let the daemon start fresh.
+async function readJobFile(path) {
+  let text;
   try {
-    const text = await fs.readFile(SEARCH_JOB_FILE, 'utf8');
-    return JSON.parse(text);
+    text = await fs.readFile(path, 'utf8');
   } catch (err) {
     if (err.code === 'ENOENT') return null;
     throw err;
   }
+  if (!text || !text.trim()) return null;
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    console.warn(`jobs: ${path} corrupted (${err.message}), treating as empty`);
+    return null;
+  }
+}
+
+export async function readSearchJob() {
+  return readJobFile(SEARCH_JOB_FILE);
 }
 
 export async function writeSearchJob(job) {
@@ -36,13 +50,7 @@ export async function clearSearchJob() {
 }
 
 export async function readDownloadJob() {
-  try {
-    const text = await fs.readFile(DOWNLOAD_JOB_FILE, 'utf8');
-    return JSON.parse(text);
-  } catch (err) {
-    if (err.code === 'ENOENT') return null;
-    throw err;
-  }
+  return readJobFile(DOWNLOAD_JOB_FILE);
 }
 
 export async function writeDownloadJob(job) {
@@ -59,13 +67,7 @@ export async function clearDownloadJob() {
 }
 
 export async function readEmbedJob() {
-  try {
-    const text = await fs.readFile(EMBED_JOB_FILE, 'utf8');
-    return JSON.parse(text);
-  } catch (err) {
-    if (err.code === 'ENOENT') return null;
-    throw err;
-  }
+  return readJobFile(EMBED_JOB_FILE);
 }
 
 export async function writeEmbedJob(job) {
@@ -82,13 +84,7 @@ export async function clearEmbedJob() {
 }
 
 export async function readSnowballJob() {
-  try {
-    const text = await fs.readFile(SNOWBALL_JOB_FILE, 'utf8');
-    return JSON.parse(text);
-  } catch (err) {
-    if (err.code === 'ENOENT') return null;
-    throw err;
-  }
+  return readJobFile(SNOWBALL_JOB_FILE);
 }
 
 export async function writeSnowballJob(job) {

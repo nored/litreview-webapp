@@ -10,6 +10,7 @@ export function parseTopic(md) {
     year_max: 'present',
     categories: [],
     method_families: [],
+    entity_types: [],
   };
   if (!md) return out;
 
@@ -43,6 +44,27 @@ export function parseTopic(md) {
     out.method_families = (meth[1].match(/-\s*([^\n]+)/g) || [])
       .map((s) => s.replace(/^-\s*/, '').trim());
   }
+
+  const ent = md.match(/entity_types:\s*\n((?:[ \t]*-[ \t]*\S.*\n?)+)/);
+  if (ent) {
+    out.entity_types = (ent[1].match(/-\s*([^\n]+)/g) || [])
+      .map((s) => s.replace(/^-\s*/, '').trim())
+      .filter((s) => s && !/^replace_with/.test(s));
+  }
+
+  // Optional: which entity_types feed the theoretical-gap detector. When
+  // unset the detector picks framework-like kinds heuristically.
+  const tkinds = md.match(/theoretical_kinds:\s*\n((?:[ \t]*-[ \t]*\S.*\n?)+)/);
+  if (tkinds) {
+    out.theoretical_kinds = (tkinds[1].match(/-\s*([^\n]+)/g) || [])
+      .map((s) => s.replace(/^-\s*/, '').trim())
+      .filter(Boolean);
+  }
+
+  const target = md.match(/target_includes:\s*(\d+)/);
+  if (target) out.target_includes = parseInt(target[1], 10);
+  const minimum = md.match(/minimum_includes:\s*(\d+)/);
+  if (minimum) out.minimum_includes = parseInt(minimum[1], 10);
 
   return out;
 }

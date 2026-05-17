@@ -23,6 +23,146 @@ const FILTERS = [
   { id: 'exclude', label: 'Exclude' },
 ];
 
+// ─────────────────────────────────────────────────────────────────────
+// Done gate: shows a "what's next" modal when triage runs out of pending
+// papers. Two paths forward: move on to download, or snowball for more.
+// Tracks dismissal per stage-2 mount so it doesn't pop repeatedly.
+// ─────────────────────────────────────────────────────────────────────
+const doneGate = (() => {
+  let overlay = null;
+  let dismissed = false;
+
+  function reset() { dismissed = false; detach(); }
+
+  function detach() {
+    if (overlay) try { overlay.remove(); } catch { /* ignore */ }
+    overlay = null;
+    document.body.classList.remove('setup-modal-open');
+  }
+
+  function maybeOpen({ counts, onSnowball }) {
+    if (dismissed) return;
+    if (!counts || counts.all === 0 || counts.pending > 0) {
+      detach();
+      return;
+    }
+    if (overlay && overlay.isConnected) return;
+    const card = document.createElement('div');
+    card.className = 'setup-modal-overlay';
+    card.setAttribute('role', 'dialog');
+    card.setAttribute('aria-modal', 'true');
+    card.innerHTML = `
+      <div class="setup-modal-card">
+        <h2 class="setup-modal-title">Triage complete</h2>
+        <p>${counts.include} included, ${counts.maybe} maybe, ${counts.exclude} excluded. No papers left to decide.</p>
+        <div class="done-modal-actions">
+          <a class="btn btn-primary btn-xl btn-rainbow-pulse" href="#/stage3" data-stage>→ Move to download</a>
+          <button type="button" class="btn" data-snowball>↻ Snowball for more papers</button>
+          <a class="muted small" href="#" data-stay>Stay on triage</a>
+        </div>
+        <p class="muted small">
+          Snowballing follows backward + forward citations from your include set to surface papers your search may have missed. New rows arrive as pending; the embed daemon indexes them automatically.
+        </p>
+      </div>`;
+    document.body.appendChild(card);
+    document.body.classList.add('setup-modal-open');
+    overlay = card;
+
+    card.querySelector('[data-stay]')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      dismissed = true;
+      detach();
+    });
+    card.querySelector('[data-stage]')?.addEventListener('click', () => { detach(); });
+    card.querySelector('[data-snowball]')?.addEventListener('click', async () => {
+      detach();
+      if (typeof onSnowball === 'function') await onSnowball();
+    });
+  }
+
+  return { maybeOpen, detach, reset };
+})();
+
+// ─────────────────────────────────────────────────────────────────────
+// Setup gate: blocks triage until embeddings are ready. Module-scoped
+// so the modal survives re-renders; auto-dismounts on stage-2 unmount.
+// ─────────────────────────────────────────────────────────────────────
+const setupGate = (() => {
+  let overlay = null;
+  let pollTimer = null;
+  let queueMax = 0;
+  let initialReadyKnown = false;
+
+  function attach() {
+    // Nothing to do up front — pollReadiness will mount when needed.
+  }
+
+  function detach() {
+    if (pollTimer) clearTimeout(pollTimer);
+    pollTimer = null;
+    if (overlay) try { overlay.remove(); } catch { /* ignore */ }
+    overlay = null;
+    document.body.classList.remove('setup-modal-open');
+    queueMax = 0;
+    initialReadyKnown = false;
+  }
+
+  async function pollReadiness() {
+    let r = null;
+    try {
+      r = await fetch('/api/triage/embed-readiness').then((res) => res.ok ? res.json() : null);
+    } catch { /* ignore */ }
+    const ready = r?.ready === true || (r?.total > 0 && (r.embedded ?? 0) >= r.total);
+    if (!initialReadyKnown) initialReadyKnown = true;
+
+    // Track the max "remaining" we've seen so progress only moves up.
+    const remaining = r ? Math.max(0, (r.total ?? 0) - (r.embedded ?? 0)) : 0;
+    if (remaining > queueMax) queueMax = remaining;
+
+    if (ready) {
+      detach();
+      return;
+    }
+
+    // Not ready → ensure modal is mounted and refresh its content.
+    ensureMounted(r);
+    pollTimer = setTimeout(pollReadiness, 2000);
+  }
+
+  function ensureMounted(r) {
+    const total = r?.total ?? 0;
+    const embedded = r?.embedded ?? 0;
+    const done = embedded;
+    const denom = Math.max(queueMax + embedded, total || 1);
+    const pct = denom > 0 ? Math.min(100, Math.round((done / denom) * 100)) : 0;
+
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.className = 'setup-modal-overlay';
+      overlay.setAttribute('role', 'dialog');
+      overlay.setAttribute('aria-modal', 'true');
+      document.body.appendChild(overlay);
+      document.body.classList.add('setup-modal-open');
+    }
+    overlay.innerHTML = `
+      <div class="setup-modal-card">
+        <h2 class="setup-modal-title">Indexing your corpus…</h2>
+        <p>Embedding <strong>${total}</strong> paper${total === 1 ? '' : 's'} so the rest of the pipeline can run. The panel auto-continues when it's ready.</p>
+        <div class="pf-setup-progress">
+          <div class="pf-setup-progress-label muted small">${done} of ${total} papers embedded (${pct}%)</div>
+          <div class="pf-setup-progress-bar"><div class="pf-setup-progress-fill running" style="width: ${pct}%"></div></div>
+        </div>
+        <p class="muted small setup-modal-rationale">
+          Embeddings drive triage clustering, near-duplicate detection, deep-read retrieval,
+          gap detectors, and catalogue ranking. They are not optional. Every later stage
+          breaks without them, so we wait here once, up front.
+        </p>
+      </div>`;
+  }
+
+  return { attach, detach, pollReadiness };
+})();
+
 export async function renderStage2(root) {
   // Loading state
   root.innerHTML = '<h1>2. Triage</h1><div class="placeholder">loading…</div>';
@@ -42,6 +182,15 @@ export async function renderStage2(root) {
     ]));
     return;
   }
+
+  // Embed-readiness gate: at MOUNT (not after a button click), check
+  // whether the papers vector store is caught up to the candidates CSV.
+  // If not, open the blocking modal immediately and keep it open until
+  // ready. The modal owns its own polling + auto-kick of the daemon.
+  setupGate.attach();
+  setupGate.pollReadiness();
+  // Reset the done-modal dismissal on every fresh mount.
+  doneGate.reset();
 
   // Load topic + criteria for AI prompts
   const [topicRes, criteriaRes] = await Promise.all([
@@ -147,6 +296,8 @@ export async function renderStage2(root) {
 
   function renderFilters() {
     const c = counts();
+    // If triage just emptied, surface the "what's next" modal once.
+    doneGate.maybeOpen({ counts: c, onSnowball: startSnowball });
     filterBar.innerHTML = '';
     for (const f of FILTERS) {
       const btn = h('button', {
@@ -619,6 +770,16 @@ export async function renderStage2(root) {
     // Don't render the strip if there's nothing to snowball from.
     if (includeCount === 0 && !job) return;
 
+    // Suppress the strip during active triage. Snowballing now would
+    // pull citations from a half-formed include set and pollute the
+    // queue with thematic neighbours the user hasn't yet judged. The
+    // done-modal (in doneGate) surfaces snowball prominently once
+    // pending hits zero, which is the right moment. Exception: a job
+    // is already running, paused, or interrupted (must remain visible
+    // so the user can manage it).
+    const triageStillBusy = c.pending > 0 && !running && !paused && !interrupted && !(job && !interrupted);
+    if (triageStillBusy) return;
+
     let body;
     if (running) {
       const done = job?.sources_done ?? 0;
@@ -899,6 +1060,9 @@ export async function renderStage2(root) {
     prefilterState.trainingBatch = [];
     prefilterState.trainingCursor = 0;
     prefilterState.trainingRoundStats = null;
+    prefilterState.settingUp = false;
+    prefilterState._setupQueueMax = null;
+    cancelPickerPoll();
     renderPrefilterBar();
     renderPrefilterPanel();
   }
@@ -951,7 +1115,17 @@ export async function renderStage2(root) {
       }).then((res) => res.json());
       if (r.error) throw new Error(r.error);
 
-      if (decision) {
+      // Server reports the centroid row was stale: roll back the
+      // optimistic local update and surface a clear message instead of
+      // silently re-showing the same paper.
+      if (r.centroid_skipped && decision) {
+        const p = papers.find((x) => x.row_index === decision.row_index);
+        if (p) p.triage_label = '';
+        prefilterState.message = {
+          kind: 'warn',
+          text: `Decision didn't stick: ${r.centroid_skipped}. Stale vector store entry, most likely. Run "Re-scan corpus" from the v2 setup or wipe _vectors/ then re-embed.`,
+        };
+      } else if (decision) {
         // Local mirror — keeps the underlying triage list in sync without
         // a separate /api/triage/papers refetch.
         const p = papers.find((x) => x.row_index === decision.row_index);
@@ -987,7 +1161,21 @@ export async function renderStage2(root) {
           kind: 'info',
           text: r.next_reason || 'No more pending papers — you are done. The classifier may have decided everything based on what you taught it.',
         };
+        // Detect "setting up" — picker is waiting on the embed daemon.
+        // Stickify the flag so the UI doesn't flicker between loading
+        // and empty branches on each poll cycle.
+        const reasonText = r.next_reason || '';
+        const isWaitingOnEmbed = /embed daemon|no embedded papers|still indexing|prototypes? yet/i.test(reasonText);
+        if (isWaitingOnEmbed) {
+          prefilterState.settingUp = true;
+          schedulePickerPoll();
+        } else {
+          prefilterState.settingUp = false;
+        }
       } else {
+        // Batch populated → setup is finished.
+        prefilterState.settingUp = false;
+        cancelPickerPoll();
         // Keep banner from previous step alive ONLY if it's the cascade
         // success note (auto-replaces on next step).
         if (r.applied === 0) prefilterState.message = null;
@@ -1000,6 +1188,7 @@ export async function renderStage2(root) {
     renderList();
     renderPrefilterBar();
     renderPrefilterPanel();
+    renderSnowballBar();   // include-count may have changed via propagation
     window.litreview?.refreshStatus?.();
   }
 
@@ -1007,12 +1196,40 @@ export async function renderStage2(root) {
     // Pass the cluster_members from the current pick so the server can
     // propagate the decision to every near-collision in one round-trip.
     const current = prefilterState.trainingBatch[0];
-    await runTrainingStep({
-      row_index: rowIndex,
-      label,
-      reason,
-      cluster_members: current?.cluster_members || [rowIndex],
-    });
+    // Optimistic local update so the count chips reflect the decision
+    // immediately. The server re-pick (community_detection over the
+    // remaining pending set) can take many seconds on a 2k+ corpus, and
+    // the user shouldn't think their click did nothing. If the server
+    // call fails, runTrainingStep rolls back via re-fetch.
+    const localPaper = papers.find((x) => x.row_index === rowIndex);
+    const prevLabel = localPaper?.triage_label;
+    const prevReason = localPaper?.triage_reason;
+    if (localPaper) {
+      localPaper.triage_label = label;
+      localPaper.triage_reason = reason || '';
+    }
+    renderFilters();
+    renderList();
+    renderPrefilterBar();
+    renderSnowballBar();   // include-count drives the snowball source count
+    try {
+      await runTrainingStep({
+        row_index: rowIndex,
+        label,
+        reason,
+        cluster_members: current?.cluster_members || [rowIndex],
+      });
+    } catch (err) {
+      // Roll back the optimistic update.
+      if (localPaper) {
+        localPaper.triage_label = prevLabel || '';
+        localPaper.triage_reason = prevReason || '';
+      }
+      renderFilters();
+      renderList();
+      renderPrefilterBar();
+      throw err;
+    }
   }
 
   async function trainingSkip(rowIndex) {
@@ -1150,7 +1367,14 @@ export async function renderStage2(root) {
       onclick: closePrefilterPanel,
     }, ['×']);
 
-    if (prefilterState.loading) {
+    // Generic loading card ONLY applies to the preview/missed sub-modes
+    // that actually do a synchronous server score. Training and advanced
+    // have their own loading states (the busy block + tab content); if
+    // we short-circuit here, the user's click on Advanced during a
+    // training-in-flight silently shows a "Preview decisions" loading
+    // card and looks like nothing happened.
+    const loadingShortCircuitModes = new Set(['preview', 'missed']);
+    if (prefilterState.loading && loadingShortCircuitModes.has(prefilterState.panelMode)) {
       prefilterPanel.appendChild(h('div', { class: 'panel-card' }, [
         h('div', { class: 'panel-card-header' }, [
           h('strong', {}, [prefilterState.panelMode === 'preview' ? 'Preview decisions' : 'Find missed includes']),
@@ -1263,32 +1487,63 @@ export async function renderStage2(root) {
       ]),
     ]);
 
-    // Idle / done state — server returned no next paper.
+    // Setup state is handled by the module-scoped setupGate (blocking
+    // modal mounted at stage 2 entry). If we're here without a batch,
+    // the gate is either resolved already or the user dismissed it.
+
+    // Idle / done state — server returned no next paper. The actual
+    // reason is in prefilterState.message (set from r.next_reason).
+    // We distinguish "truly done" from "embed daemon hasn't indexed
+    // yet" so the user knows whether to wait or call it a day.
     if (!batch.length && !prefilterState.loading) {
       const aiNowAvailable = !!state?.ai_sort_unlocked;
+      const reasonText = prefilterState.message?.text || '';
+      const pendingTotal = state?.pending ?? 0;
+      const inferredDone = pendingTotal === 0;
+
+      let headline, explanation, actions;
+      if (false) {
+        // (setting-up handled above; this branch never executes)
+      } else if (inferredDone) {
+        headline = 'All papers triaged. Nothing left to decide.';
+        explanation = null;
+        actions = [
+          h('button', { type: 'button', class: 'btn btn-ghost', onclick: closePrefilterPanel }, ['Done']),
+        ];
+      } else {
+        // Pending > 0 but the picker still returned nothing — could be
+        // "every paper has been skipped this session" or another
+        // server-side reason. Show whatever the server said.
+        headline = reasonText || 'No more pending papers to pick this session.';
+        explanation = pendingTotal > 0
+          ? h('p', { class: 'muted small' }, [
+              `${pendingTotal} paper${pendingTotal === 1 ? ' is' : 's are'} still pending in the corpus — they\'ve all been skipped in this session. Click "Reset session" to make them pickable again, or close and re-open to refresh.`,
+            ])
+          : null;
+        actions = [
+          aiNowAvailable ? h('button', {
+            type: 'button', class: 'btn btn-primary',
+            onclick: () => { closePrefilterPanel(); runAutoTriage(); },
+          }, ['Auto-decide remaining']) : null,
+          pendingTotal > 0 ? h('button', {
+            type: 'button', class: 'btn',
+            onclick: () => { prefilterState.trainingSkipped = new Set(); runTrainingStep(null); },
+          }, ['Reset session']) : null,
+          h('button', { type: 'button', class: 'btn btn-ghost', onclick: closePrefilterPanel }, ['Close']),
+        ].filter(Boolean);
+      }
+
       return h('div', { class: 'panel-card' }, [
         header,
         renderMessageBanner(prefilterState.message),
-        h('p', { class: 'muted' }, [
-          'No more pending papers to pick from — every paper has been decided or skipped this session.',
-        ]),
-        aiNowAvailable ? h('div', { class: 'pf-banner pf-banner-success' }, [
+        h('p', {}, [headline]),
+        explanation,
+        aiNowAvailable && inferredDone ? h('div', { class: 'pf-banner pf-banner-success' }, [
           h('span', { class: 'pf-banner-text' }, [
             '✓ Auto-decide is unlocked. The classifier has enough labeled data to apply your knowledge across the rest.',
           ]),
         ]) : null,
-        h('div', { class: 'inline-row' }, [
-          aiNowAvailable ? h('button', {
-            type: 'button',
-            class: 'btn btn-primary',
-            onclick: () => { closePrefilterPanel(); runAutoTriage(); },
-          }, ['Auto-decide remaining']) : null,
-          h('button', {
-            type: 'button',
-            class: 'btn btn-ghost',
-            onclick: closePrefilterPanel,
-          }, ['Done']),
-        ]),
+        h('div', { class: 'inline-row' }, actions),
       ]);
     }
 
@@ -1307,6 +1562,24 @@ export async function renderStage2(root) {
       ]);
     }
 
+    // Loading-after-decision: show a prominent block, NOT the previous
+    // paper card. The community_detection re-pick over thousands of
+    // pending papers can take many seconds; the user must see clear
+    // progress (not the disabled-buttons state on the same card).
+    if (prefilterState.loading && batch.length) {
+      return h('div', { class: 'panel-card training-card' }, [
+        header,
+        h('div', { class: 'training-busy-block' }, [
+          h('div', { class: 'training-busy-spinner' }, []),
+          h('h3', {}, ['Picking the next paper…']),
+          h('p', { class: 'muted' }, [
+            'The classifier is re-weighting from your decision and clustering the remaining pending papers to find the next high-information centroid. On a fresh corpus this can take up to a minute.',
+          ]),
+          h('div', { class: 'pf-progress-indeterminate' }, []),
+        ]),
+      ]);
+    }
+
     // Current paper to decide on — always batch[0] since we now fetch one
     // at a time. The "cluster_size" tells the student how many near-
     // duplicates their decision will apply to in one click.
@@ -1315,6 +1588,7 @@ export async function renderStage2(root) {
     const abstract = paper.abstract || '';
     const authors = paper.authors || '';
     const clusterSize = blind.cluster_size || 1;
+    const communitySize = blind.community_size || clusterSize;
 
     const reasonInput = h('input', {
       type: 'text',
@@ -1379,14 +1653,30 @@ export async function renderStage2(root) {
       header,
       renderMessageBanner(prefilterState.message),
       h('div', { class: 'training-livebar' }, [recomputeHint]),
-      clusterSize > 1
-        ? h('div', { class: 'training-cluster-note' }, [
-            h('strong', {}, [`This paper represents ${clusterSize} near-duplicate pending papers.`]),
-            ' Your decision will apply to all of them in one click.',
-          ])
-        : h('div', { class: 'training-cluster-note muted small' }, [
-            'No close near-duplicates — this decision will only apply to this paper (the wider cascade may still pick up other confident matches).',
-          ]),
+      (() => {
+        // Two distinct numbers:
+        //   communitySize : full thematic cluster the embedder put this
+        //                   paper in (broad topic, 10-50+ papers).
+        //   clusterSize   : strict near-duplicate subset that inherits
+        //                   this decision (preprint+published-style).
+        // We always show the community context so the user knows the
+        // embedder is at work — the picker is walking through related
+        // papers cluster-by-cluster, not random rows.
+        if (clusterSize > 1) {
+          return h('div', { class: 'training-cluster-note' }, [
+            h('strong', {}, [`Representative of a ${communitySize}-paper topical cluster, with ${clusterSize} near-duplicate(s).`]),
+            ` Your decision auto-applies to the ${clusterSize} near-duplicate(s); the other ${Math.max(0, communitySize - clusterSize)} thematic neighbours will be shown next as you continue training.`,
+          ]);
+        }
+        if (communitySize > 1) {
+          return h('div', { class: 'training-cluster-note muted small' }, [
+            `Picked from a ${communitySize}-paper topical cluster. Decision applies to this paper only (no near-duplicate twins found above 0.88 cosine). The next picks will surface other members of similar clusters.`,
+          ]);
+        }
+        return h('div', { class: 'training-cluster-note muted small' }, [
+          'Singleton — no topical neighbours in pending. Decision applies to this paper only.',
+        ]);
+      })(),
       h('div', { class: 'training-paper' }, [
         h('h3', { class: 'training-title' }, [paper.title || '(untitled)']),
         h('div', { class: 'training-meta muted small' }, [
@@ -1460,6 +1750,73 @@ export async function renderStage2(root) {
     return sign + m.toFixed(3);
   }
 
+  // Poll the picker every 4s while we're in "setting up" mode. Cleared
+  // the moment a real batch arrives or the panel closes. setTimeout
+  // (single chain) — no risk of overlapping handlers.
+  function schedulePickerPoll() {
+    cancelPickerPoll();
+    prefilterState._setupPoll = setTimeout(() => {
+      prefilterState._setupPoll = null;
+      if (prefilterState.settingUp && !prefilterState.trainingBatch.length) {
+        runTrainingStep(null);
+      }
+    }, 4000);
+  }
+  function cancelPickerPoll() {
+    if (prefilterState._setupPoll) {
+      clearTimeout(prefilterState._setupPoll);
+      prefilterState._setupPoll = null;
+    }
+  }
+
+  // Live progress bar for the setup view. Polls /api/embed/status
+  // every 2s, computes "papers ready" against the max queue size seen.
+  function renderSetupProgress() {
+    const wrap = h('div', { class: 'pf-setup-progress' });
+    const label = h('div', { class: 'pf-setup-progress-label muted small' }, ['Indexing papers…']);
+    const barOuter = h('div', { class: 'pf-setup-progress-bar' });
+    const barInner = h('div', { class: 'pf-setup-progress-fill' });
+    barOuter.appendChild(barInner);
+    wrap.appendChild(label);
+    wrap.appendChild(barOuter);
+
+    let timer = null;
+    async function refresh() {
+      if (!wrap.isConnected) { if (timer) clearTimeout(timer); return; }
+      let s = null;
+      try {
+        const r = await fetch('/api/embed/status');
+        s = r.ok ? await r.json() : null;
+      } catch { /* ignore */ }
+      if (s) {
+        const q = (s.queue_size ?? 0) + (s.inflight ?? 0);
+        // Track the largest queue we've seen so progress only goes up.
+        if (typeof prefilterState._setupQueueMax !== 'number' || q > prefilterState._setupQueueMax) {
+          prefilterState._setupQueueMax = q;
+        }
+        const max = prefilterState._setupQueueMax || 1;
+        const done = Math.max(0, max - q);
+        const pct = max > 0 ? Math.min(100, Math.round((done / max) * 100)) : 0;
+        barInner.style.width = pct + '%';
+        if (q > 0 || s.running) {
+          label.textContent = `Indexing… ${done} of ${max} papers (${pct}%)`;
+          barInner.classList.add('running');
+        } else {
+          // Queue drained but picker still says not ready — usually a
+          // micro-delay before the picker sees the new vectors.
+          label.textContent = 'Indexing finished — picking first paper…';
+          barInner.style.width = '100%';
+          barInner.classList.add('running');
+        }
+      } else {
+        label.textContent = 'Indexing… (status unavailable)';
+      }
+      timer = setTimeout(refresh, 2000);
+    }
+    refresh();
+    return wrap;
+  }
+
   function renderMessageBanner(msg) {
     if (!msg) return null;
     return h('div', { class: 'pf-banner pf-banner-' + msg.kind }, [
@@ -1472,6 +1829,7 @@ export async function renderStage2(root) {
       }, ['×']),
     ]);
   }
+
 
   function renderClassifierBlock(tuning, thresholds) {
     if (!tuning && !thresholds) return null;
@@ -2024,6 +2382,7 @@ Answer:`;
       renderFilters();
       renderList();
       renderBatchBar();
+      renderSnowballBar();   // include-count drives the snowball source count
       // Every user decision retrains the classifier — refresh the gating
       // state so the AI-sort buttons unlock the instant the threshold is
       // crossed via normal manual labelling.
@@ -2153,6 +2512,8 @@ Answer:`;
     if (snowballState.sseStop) snowballState.sseStop();
     batchState.cancelled = true;
     batchState.running = false;
+    setupGate.detach();
+    doneGate.detach();
     root.classList.remove('view-triage');
   };
 }

@@ -1,23 +1,25 @@
 # Literature Review Web App
 
-Local-first web app for running an MSc/BSc thesis literature review pipeline. Companion to the [CLI template](https://github.com/nored/thesis-litreview-template); the on-disk artifact format is identical so you can switch between the two on the same project.
+Local-first web app for **structured analysis over a research-domain corpus**. Build a gap report, identify research opportunities, and produce evidence-grounded positioning artefacts — for a thesis literature review, a related-work section, a grant proposal, a review-paper, or any work that needs to position itself against prior literature.
 
 Pipeline stages: search → triage → download → deep read → corpus shape → positioning & catalogue → loop close. Every LLM-touching feature inherits the same five-way provider switch (off / WebLLM / OpenAI-compatible / Anthropic / share-to-chat).
+
+**v2 in progress (2026-05):** the deep-read stage is being migrated to a structured per-paper extraction pipeline (typed fields with full provenance) feeding 11 cross-paper detectors over a SQLite store. The legacy prose-drafter Stage 4 remains available at `#/stage4-legacy`; the new structured form lives at `#/stage4`.
 
 ## What you get
 
 - **Stage 1 — Search**: arXiv + OpenAlex + Semantic Scholar with rate limiting, deduplication, manifest-based interrupt-resume.
 - **Stage 2 — Triage**: mail-client-style three-pane layout. `I` / `M` / `E` / `Enter` keyboard shortcuts. Multi-prototype embedding classifier with active-learning training wizard — the system asks blind questions, you label, weights re-tune on every decision. Snowball expansion (forward + backward citations via OpenAlex) lands new candidates as pending triage rows.
 - **Stage 3 — Download**: background daemon auto-fetches PDFs as you mark papers `include` / `maybe`. Bookmarklet for one-click capture from publisher pages that reject scripted clients.
-- **Stage 4 — Deep read**: native PDF viewer + structured note form mirroring the canonical schema. Section-aware RAG drafter — 5 parallel LLM calls over PDF-section-retrieved chunks per paper, plus 2 zero-shot extractions (cosine for categories/method-family/relevance, regex for metrics/case-count/booleans). Optional **audit & revise** pass: a critic LLM rereads each section against the retrieved chunks and rewrites the ones it flags. Optional **cross-paper context**: top-3 related notes from the corpus injected so the drafter can make comparative claims. **Quote grounding**: every paragraph gets a `(pp. X)` page reference matched against the chunks it was drafted from. Across-papers batch with 3-way concurrency.
-- **Stage 5 — Corpus shape**: read-only overview before you commit to a topic. Gap matrix (category × method), method × novelty lattice (perpendicular view: which methods produce strong-novelty work vs incremental work, which lean on self-constructed ground truth), outliers (papers far from the corpus centroid), contradiction audit (paraphrase-mined pairs, per-pair LLM judge), recurring-limitations clusters.
-- **Stage 6 — Positioning & catalogue**: five-section workflow that produces every artefact a supervisor expects.
-  1. **Candidates & shortlist** — generate gap candidates from the corpus, score each against seven thesis indicators, auto-compute the accept/refine/reject shortlist. Flat indicator scorecard table for the whole shortlist.
-  2. **PRISMA flow** — CSS block diagram (Identification → Deduplication → Screening + excluded → Eligibility + unavailable → Included). Ready-to-paste methodology paragraph.
-  3. **Positioning statement** — pick a candidate, auto-fill a structured 1-pager (topic / field state / closest prior work / gap / RQ / external validation / methodology / why-not-hobby / indicator summary), edit, save.
-  4. **Catalogue** — multi-chapter thesis topic catalogue (state-of-the-art + per-topic chapters + topic selection). Per-section RAG over the notes vector store so chapters are grounded in actual note prose, not just frontmatter. Post-generation citation-coverage check flags must-cite papers the LLM silently dropped.
-  5. **External AI handoff** — ZIP export + master prompt clipboard. For when local AI output is weak and you want to paste into Claude.ai or ChatGPT.
-- **Stage 7 — Loop close**: closed-loop remediation. Walks the pipeline state and surfaces concrete next actions: "Triage 12 pending hits", "Draft 8 missing notes", "Audit 5 contradiction candidate pairs", "Address 3 must-cite papers missing from the catalogue", "N empty matrix cells in explored regions". Each card has a severity (red blocking / yellow quality / green opportunity) and a deep-link to the stage that resolves it.
+- **Stage 4 — Deep read (structured extraction)**: three-pane layout (paper list / PDF viewer / structured record). Per-paper pipeline: PDF chunks → section classifier → bool signals (5) + categorical enums (3) + named entities (tech/datasets/frameworks) + numerical (sample size + results) + topic enums (category, method_family). Every field carries provenance (mechanism, source chunk, page, raw quote, classifier scores). Optional **claims extraction (WebLLM)** runs LLM-as-finder bounded to substring-validated quotes, NLI-classified stance per claim. Inline editing on every field; undo on the most recent edit.
+- **Stage 5 — Corpus shape (detector dashboards)**: read-only. 11 pure-SQL/JS detectors over the structured store — 7 typed gap detectors (Evidence / Knowledge / Practical / Methodological / Empirical / Theoretical / Population), 4 network analyses (citation centrality / main path / co-citation / bibliographic coupling), plus temporal trends, LOF + n-gram novelty, citation-weighted rerank. Every candidate carries a deterministic signature; user can dismiss a candidate and have the dismissal stick across runs.
+- **Stage 6 / 7 — Positioning & catalogue (output modes)**: pick an output mode at the top.
+  - **Thesis** — PRISMA flow + top gap candidates from the detectors + positioning statement + v2 catalogue (verbatim quotes grouped by category × body section, every quote has page + paper_id provenance).
+  - **Paper** — related-work table + top gaps + suggested positioning paragraph.
+  - **Grant** — gap report + bibliometric impact + research-direction suggestions.
+  - **Landscape** — corpus inventory + temporal trends + central papers + optional external-corpus comparison (OpenAlex same-topic pull, joint clustering, gap-cluster flagging).
+  - **Custom** — structured query bar + recommendation surface over the SQLite store.
+- **Stage 8 — Loop close**: closed-loop remediation. Walks the pipeline state and surfaces concrete next actions, each with a severity tier and deep-link to the stage that resolves it.
 
 ## Multi-provider AI
 
@@ -58,11 +60,13 @@ Five runtime deps: `express`, `fast-xml-parser`, `yaml`, `pdfjs-dist` (pure-JS P
 
 On first run, fill the **Setup** view:
 
-- Topic title and description
-- Categories and method families (used as gap-matrix axes)
-- Year window
-- Contact email (used in HTTP politeness headers)
-- *Optional*: paste your Semantic Scholar API key (kills the 429 rate-limit pain)
+- **Topic title and description** — drives search queries, catalogue prototypes, and extraction prompts.
+- **Categories and method families** — used as detector axes (methodological / knowledge / population gap tensors).
+- **Target/minimum includes** — the rough corpus size you're aiming for; influences adaptive detector thresholds.
+- **Year window** — bounds search results.
+- **Contact email** — used in HTTP politeness headers for arXiv / OpenAlex / Semantic Scholar.
+- *Optional*: **Semantic Scholar API key** (kills the 429 rate-limit pain).
+- *Optional*: **OpenAI / Anthropic credentials** for server-side LLM calls. Set `provider_fallback` to e.g. `"anthropic,openai"` to chain across providers when the primary fails before any tokens stream.
 
 ## Project layout
 
@@ -96,7 +100,7 @@ project/
     └── catalogue.md
 ```
 
-`project/` is gitignored. Bring your own `git init project/` if you want version control of your thesis work separately.
+`project/` is gitignored. Bring your own `git init project/` if you want version control of your review work separately.
 
 ## Switch between web app and CLI
 
@@ -127,10 +131,7 @@ API keys are stored in `project/data/_credentials.json` with file mode 0600. The
 Things on the roadmap but not yet built:
 
 - **UX audit across stages 1/2/3.** Stages 4/5/6/7 have been audited and consolidated against the "stupid user gets a good result" principle. The earlier stages haven't yet — the triage training wizard in particular has the kind of complexity stage 5 used to have. Mandatory before a 1.0.
-- **External corpus comparison.** Pull a same-topic OpenAlex sample, embed centroids, surface "areas the field has explored that your corpus missed". Considered and deferred — significant overlap with snowballing + triangulation already in place, OpenAlex bulk-pull complexity (rate limits, caching, refresh UI) is high, and the actionable signal is narrow (papers the field publishes but your include set doesn't cite). May come back as a smaller variant ("re-run-search sanity check" or "topical recall check per matrix cell") if recall-anxiety surfaces in practice.
-- **Provider robustness.** Clearer error messages, retry-on-rate-limit, fallback chains across providers when the primary fails mid-batch.
-- **Embed-daemon visibility.** The daemon currently runs silent — surface a heartbeat / queue depth somewhere so the student knows when their notes are about to be retrievable.
-- **Project export / import.** ZIP the whole project for archiving or handoff to a collaborator. The catalogue's external-AI-handoff ZIP is a precedent.
+- **Fallback chains across providers.** Provider robustness now has retry-with-backoff and human-readable errors; full chained-fallback (auto-fail-over from Claude to OpenAI mid-batch) is still on the list.
 
 ## License
 

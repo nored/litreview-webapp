@@ -1,46 +1,35 @@
 // Unified LLM client. Three providers:
-//   'webllm'    in-browser via WebLLM (no key needed, runs on WebGPU)
+//   'webllm'    Server-side llama.cpp via /api/llm/chat (no key, runs in
+//               Node with Metal/CUDA/CPU). The model is loaded ON THE
+//               SERVER; the browser just picks which model.
 //   'openai'    OpenAI-compatible (Ollama, OpenAI, OpenRouter, vLLM, …)
 //                proxied through our local server so API keys stay on disk
 //   'anthropic' Claude API, also proxied
 //
 // Call sites just use chat({ system, user, onToken }) — same shape as
-// before. The active provider determines where the call goes.
-
-const WEBLLM_URL = 'https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm/+esm';
-
-export const WEBLLM_MODELS = [
-  { id: 'Llama-3.2-3B-Instruct-q4f16_1-MLC', label: 'Llama 3.2 3B', size: '~2 GB', note: 'recommended balance of size and quality' },
-  { id: 'Qwen2.5-3B-Instruct-q4f16_1-MLC',   label: 'Qwen 2.5 3B',  size: '~2 GB', note: 'strong multilingual' },
-  { id: 'Ministral-3-3B-Instruct-2512-BF16-q4f16_1-MLC', label: 'Ministral 3B', size: '~2 GB', note: 'newest 3B-class option' },
-  { id: 'gemma3-1b-it-q4f16_1-MLC',          label: 'Gemma 3 1B',   size: '~700 MB', note: 'fast small model' },
-  { id: 'SmolLM2-1.7B-Instruct-q4f16_1-MLC', label: 'SmolLM 2 1.7B', size: '~1 GB', note: 'compact' },
-];
-// Backwards-compat alias for callers still importing `MODELS`
-export const MODELS = WEBLLM_MODELS;
+// before. The active provider determines where the call goes. All three
+// providers stream from /api/llm/chat now; there is no more in-browser
+// inference path.
 
 const PROVIDER_KEY = 'litreview:llm:provider';
-const AUTOLOAD_KEY = 'litreview:llm:autoload';
 
 const state = {
   provider: 'webllm',
-  // WebLLM-specific:
-  webllm: null,
-  engine: null,
-  modelId: null,
-  loadingPromise: null,
-  loadingModelId: null,
-  lastProgress: null,
-  lastError: null,
+  // Server-side local LLM:
+  localRegistry: [],         // fetched from /api/v2/local-llm/models
+  localDefault:  null,
+  localStatus:   { state: 'idle', current_model_id: null, loaded_model_id: null, progress: null, error: null },
   // Remote provider config snapshot (refreshed from /api/credentials):
   remoteConfig: { openai: { configured: false }, anthropic: { configured: false } },
   // Pub/sub for the AI status pill:
   listeners: new Set(),
+  // Poll timer for server-side LLM status while a download/load is running.
+  pollTimer: null,
 };
 
 function emit(event) {
   for (const fn of state.listeners) {
-    try { fn(event); } catch (e) { /* ignore */ }
+    try { fn(event); } catch { /* ignore */ }
   }
 }
 
@@ -65,37 +54,29 @@ function loadProviderPref() {
 }
 loadProviderPref();
 
-// ---- Auto-load (WebLLM only) ----
-export function getAutoLoadPref() {
-  try { return localStorage.getItem(AUTOLOAD_KEY) || ''; } catch { return ''; }
-}
-export function setAutoLoadPref(modelId) {
-  try { localStorage.setItem(AUTOLOAD_KEY, modelId || ''); } catch {}
-}
-export function clearAutoLoadPref() {
-  try { localStorage.removeItem(AUTOLOAD_KEY); } catch {}
-}
-
-// ---- WebGPU detection ----
-export function isWebGPUAvailable() {
-  return typeof navigator !== 'undefined' && !!navigator.gpu;
-}
-
 // ---- Status (used by the topbar pill) ----
 export function status() {
   if (state.provider === 'webllm') {
+    const s = state.localStatus;
+    const cur = s.loaded_model_id || s.current_model_id;
+    const entry = state.localRegistry.find((m) => m.id === cur);
+    const loading = s.state === 'downloading' || s.state === 'loading';
+    let progress = null;
+    if (s.state === 'downloading' && s.progress) {
+      const p = s.progress.bytes_total ? (s.progress.bytes_done / s.progress.bytes_total) : 0;
+      progress = { progress: p, text: `downloading ${humanBytes(s.progress.bytes_done)} / ${humanBytes(s.progress.bytes_total)}` };
+    } else if (s.state === 'loading') {
+      progress = { progress: 0.99, text: 'loading into memory…' };
+    }
     return {
       provider: 'webllm',
-      available: isWebGPUAvailable(),
-      loaded: state.engine != null,
-      loading: state.loadingPromise != null,
-      modelId: state.modelId,
-      loadingModelId: state.loadingModelId,
-      progress: state.lastProgress,
-      error: state.lastError,
-      displayName: state.modelId
-        ? (WEBLLM_MODELS.find((m) => m.id === state.modelId)?.label ?? 'WebLLM')
-        : null,
+      available: true,
+      loaded: s.state === 'ready',
+      loading,
+      modelId: cur,
+      progress,
+      error: s.error,
+      displayName: entry?.label ?? cur ?? null,
     };
   }
   const cfg = state.remoteConfig[state.provider];
@@ -113,51 +94,51 @@ export function status() {
 export function isLoaded() { return status().loaded; }
 export function currentModel() { return status().modelId; }
 
-// ---- WebLLM model loading ----
-async function ensureWebLLM() {
-  if (state.webllm) return state.webllm;
-  state.webllm = await import(WEBLLM_URL);
-  return state.webllm;
+function humanBytes(n) {
+  if (!n || n <= 0) return '0 B';
+  const u = ['B', 'KB', 'MB', 'GB'];
+  let i = 0; let v = n;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i += 1; }
+  return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${u[i]}`;
 }
 
-export async function loadModel(modelId) {
-  if (!isWebGPUAvailable()) {
-    const err = new Error('WebGPU is not available in this browser.');
-    state.lastError = err.message;
-    emit({ type: 'error', error: err.message });
-    throw err;
-  }
-  if (state.modelId === modelId && state.engine && !state.loadingPromise) return state.engine;
-  if (state.loadingPromise && state.loadingModelId === modelId) return state.loadingPromise;
-  state.loadingModelId = modelId;
-  state.lastError = null;
-  state.lastProgress = { progress: 0, text: 'starting…' };
-  emit({ type: 'loading', progress: state.lastProgress, modelId });
-  state.loadingPromise = (async () => {
-    const webllm = await ensureWebLLM();
-    const engine = new webllm.MLCEngine();
-    engine.setInitProgressCallback((report) => {
-      state.lastProgress = { progress: report.progress, text: report.text };
-      emit({ type: 'progress', progress: state.lastProgress });
-    });
-    try {
-      await engine.reload(modelId);
-      state.engine = engine;
-      state.modelId = modelId;
-      state.lastProgress = { progress: 1, text: 'ready' };
-      setAutoLoadPref(modelId);
-      emit({ type: 'ready', modelId });
-      return engine;
-    } catch (err) {
-      state.lastError = err?.message || String(err);
-      emit({ type: 'error', error: state.lastError });
-      throw err;
-    } finally {
-      state.loadingPromise = null;
-      state.loadingModelId = null;
+// ---- Server-side local LLM: registry + selection + status polling ----
+export function getLocalRegistry() { return state.localRegistry.slice(); }
+export function getLocalDefault()  { return state.localDefault; }
+
+export async function refreshLocalRegistry() {
+  try {
+    const data = await fetch('/api/v2/local-llm/models').then((r) => r.json());
+    state.localRegistry = Array.isArray(data.registry) ? data.registry : [];
+    state.localDefault  = data.default_model_id || null;
+    emit({ type: 'local-registry' });
+  } catch { /* server may not be up yet */ }
+}
+
+export async function refreshLocalStatus() {
+  try {
+    state.localStatus = await fetch('/api/v2/local-llm/status').then((r) => r.json());
+    emit({ type: 'local-status', status: state.localStatus });
+    const busy = state.localStatus.state === 'downloading' || state.localStatus.state === 'loading';
+    if (busy && !state.pollTimer) {
+      state.pollTimer = setInterval(refreshLocalStatus, 1500);
+    } else if (!busy && state.pollTimer) {
+      clearInterval(state.pollTimer);
+      state.pollTimer = null;
     }
-  })();
-  return state.loadingPromise;
+  } catch { /* server may not be up yet */ }
+}
+
+export async function selectLocalModel(model_id) {
+  const r = await fetch('/api/v2/local-llm/select', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model_id }),
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  state.localStatus = await r.json();
+  emit({ type: 'local-status', status: state.localStatus });
+  refreshLocalStatus();   // start the poll
 }
 
 // ---- Remote provider config ----
@@ -176,39 +157,15 @@ export async function refreshRemoteConfig() {
       },
     };
     emit({ type: 'remote-config', config: state.remoteConfig });
-  } catch (e) {
-    /* ignore */
-  }
+  } catch { /* ignore */ }
 }
 
 export function getRemoteConfig() { return state.remoteConfig; }
 
 // ---- Unified chat ----
+// All three providers now stream from /api/llm/chat. The server proxy
+// routes 'webllm' to llm_local, the others to their respective backends.
 export async function chat({ system, user, temperature = 0.7, onToken } = {}) {
-  if (state.provider === 'webllm') return chatWebllm({ system, user, temperature, onToken });
-  return chatRemote({ system, user, temperature, onToken });
-}
-
-async function chatWebllm({ system, user, temperature, onToken }) {
-  if (!state.engine) throw new Error('no WebLLM model loaded');
-  const messages = [];
-  if (system) messages.push({ role: 'system', content: system });
-  messages.push({ role: 'user', content: user });
-
-  if (onToken) {
-    const stream = await state.engine.chat.completions.create({ messages, temperature, stream: true });
-    let full = '';
-    for await (const chunk of stream) {
-      const delta = chunk.choices?.[0]?.delta?.content ?? '';
-      if (delta) { full += delta; onToken(delta, full); }
-    }
-    return full;
-  }
-  const res = await state.engine.chat.completions.create({ messages, temperature });
-  return res.choices[0].message.content;
-}
-
-async function chatRemote({ system, user, temperature, onToken }) {
   const provider = state.provider;
   const res = await fetch('/api/llm/chat', {
     method: 'POST',
@@ -241,3 +198,23 @@ async function chatRemote({ system, user, temperature, onToken }) {
   }
   return full;
 }
+
+// ---- Backwards-compat shims for older call sites ----
+// Callers that import `WEBLLM_MODELS` or `loadModel` from this file now
+// get the server-side registry view. `loadModel` selects a server-side
+// model (returns once the server has acknowledged; status updates
+// stream via subscribe()).
+export const WEBLLM_MODELS = new Proxy([], {
+  get(_t, prop) {
+    const arr = state.localRegistry.map((m) => ({
+      id: m.id, label: m.label, size: `${m.size_gb} GB`, note: m.description,
+    }));
+    return arr[prop];
+  },
+});
+export const MODELS = WEBLLM_MODELS;
+export async function loadModel(modelId) { return selectLocalModel(modelId); }
+export function isWebGPUAvailable() { return true; }   // server-side; always "available"
+export function getAutoLoadPref() { return state.localStatus.current_model_id || ''; }
+export function setAutoLoadPref(_id) { /* persisted server-side now */ }
+export function clearAutoLoadPref() { /* persisted server-side now */ }

@@ -30,6 +30,38 @@ const BODY_SECTION_HEADINGS = {
   relevance_to_the_thesis_topic: 'Relevance to the thesis topic',
 };
 
+// Empty `extracted:` subtree for the v2 schema. Every populated field
+// gets a provenance subtree at extraction time. Phase 1a places only the
+// skeleton; Phase 1b populates the fields via the per-field extractors.
+// Lives under a single namespaced key so CLI-template readers can ignore
+// the whole subtree without touching v1 fields.
+export function emptyExtracted() {
+  return {
+    section_index: null,        // { <label>: [chunk_id] }, built by section_classifier
+    methodology_type: null,     // { value, provenance }
+    population: {
+      language: [],             // [{ value, provenance }]
+      geography: [],            // [{ value, provenance }]
+      system_domain: null,
+      sample_type: null,
+      time_period: null,
+    },
+    tech_stack: [],             // [{ canonical, raw, provenance }]
+    datasets_used: [],          // [{ canonical, n, role, raw, provenance }]
+    frameworks_cited: [],       // [{ canonical, raw, provenance }]
+    sample_size: null,
+    results: [],                // [{ metric, value, dataset, split, provenance }]
+    claims_first_in_area: null,
+    challenges_existing: null,
+    baseline_compared: null,
+    releases_code: null,
+    reports_uncertainty: null,
+    claims: [],                 // [{ text, page, stance, claim_type, topic_embedding?, provenance }]
+    quoted_spans: Object.fromEntries(BODY_SECTIONS.map((s) => [s, []])),
+    closest_related: {},        // { <body_section>: [{ text, page, chunk_id, similarity }] }
+  };
+}
+
 export function emptyNote(paperRow = {}) {
   // Default arXiv preprints' venue to 'arXiv' so an arXiv ID is sufficient
   // identification without nagging the student for a journal name.
@@ -62,6 +94,11 @@ export function emptyNote(paperRow = {}) {
         predictable_outcome: false,
       },
       relevance: { relevance_to_topic: '', must_cite: false },
+      // v2 additions — see emptyExtracted() above. Notes saved without
+      // `schema_version` are treated as v1 implicitly; the structured
+      // extracted subtree is empty until the new extractor populates it.
+      schema_version: 2,
+      extracted: emptyExtracted(),
     },
     body: Object.fromEntries(BODY_SECTIONS.map((s) => [s, ''])),
   };
@@ -71,6 +108,32 @@ function parseAuthors(s) {
   if (!s) return [];
   if (Array.isArray(s)) return s;
   return String(s).split(/,\s*/).map((x) => x.trim()).filter(Boolean);
+}
+
+// Merge a parsed `extracted:` subtree with the empty skeleton so the rest
+// of the codebase can assume the full shape without per-field defaulting.
+// Preserves any populated fields verbatim — only fills missing keys.
+function normalizeExtracted(parsed) {
+  const skel = emptyExtracted();
+  if (!parsed || typeof parsed !== 'object') return skel;
+  const merged = { ...skel, ...parsed };
+  // Population is a nested object — merge its fields too rather than
+  // overwriting the whole subtree if the YAML only set one key.
+  merged.population = { ...skel.population, ...(parsed.population || {}) };
+  // quoted_spans is per-body-section; ensure every section key exists.
+  const qs = { ...skel.quoted_spans, ...(parsed.quoted_spans || {}) };
+  for (const k of BODY_SECTIONS) {
+    if (!Array.isArray(qs[k])) qs[k] = [];
+  }
+  merged.quoted_spans = qs;
+  merged.closest_related = parsed.closest_related && typeof parsed.closest_related === 'object'
+    ? parsed.closest_related
+    : {};
+  // Array fields: ensure they're arrays even if the YAML had null.
+  for (const k of ['tech_stack', 'datasets_used', 'frameworks_cited', 'results', 'claims']) {
+    if (!Array.isArray(merged[k])) merged[k] = [];
+  }
+  return merged;
 }
 
 export function parseNoteMd(md) {
@@ -86,6 +149,18 @@ export function parseNoteMd(md) {
     if (!Array.isArray(note.frontmatter.limitations_authors_state)) note.frontmatter.limitations_authors_state = [];
     if (!note.frontmatter.method?.inputs) note.frontmatter.method.inputs = [];
     if (!note.frontmatter.evaluation?.metrics) note.frontmatter.evaluation.metrics = [];
+    // v2 schema: notes saved before the extracted subtree existed are
+    // treated as v1 — fill in the skeleton so downstream code can assume
+    // the shape. Existing extracted fields from the YAML are kept; the
+    // missing ones are filled with empty defaults. We check the parsed
+    // YAML directly (`fm.schema_version`), not the merged frontmatter,
+    // because emptyNote() always seeds schema_version=2 by default.
+    if (typeof fm.schema_version === 'number') {
+      note.frontmatter.schema_version = fm.schema_version;
+    } else {
+      note.frontmatter.schema_version = fm.extracted ? 2 : 1;
+    }
+    note.frontmatter.extracted = normalizeExtracted(fm.extracted);
   } catch (e) {
     /* keep default frontmatter on yaml errors */
   }
@@ -165,7 +240,57 @@ function serializeFrontmatter(fm) {
   lines.push('relevance:');
   lines.push(`  relevance_to_topic: ${stringifyScalar(fm.relevance?.relevance_to_topic || '')}`);
   lines.push(`  must_cite: ${!!fm.relevance?.must_cite}`);
+
+  // v2 schema additions live at the end so v1-aware readers (the CLI
+  // template) can skip everything below without parsing it. The whole
+  // subtree is serialized via stringifyYaml since the field layout is
+  // shape-rich (provenance subtrees, varied types) and the CLI doesn't
+  // need byte-stable output for this section.
+  if (typeof fm.schema_version === 'number' && fm.schema_version >= 2) {
+    lines.push('');
+    lines.push(`schema_version: ${fm.schema_version}`);
+    const extracted = fm.extracted || emptyExtracted();
+    // Only emit `extracted:` if at least one field is populated, to
+    // keep notes that haven't been re-extracted yet from carrying a
+    // wall of empty defaults.
+    if (extractedHasContent(extracted)) {
+      // lineWidth: 0 disables auto-wrapping of long strings. We don't
+      // set defaultStringType — the yaml library picks the safest form
+      // per value (unquoted for short safe strings, quoted when needed)
+      // and crucially leaves keys unquoted, so `extracted:` stays
+      // readable rather than `"extracted":`.
+      const yamlBlock = stringifyYaml({ extracted }, { lineWidth: 0 })
+        .replace(/\n+$/, '');
+      lines.push(yamlBlock);
+    }
+  }
   return lines.join('\n');
+}
+
+// True iff any extracted field is populated beyond the empty skeleton.
+// Used to skip writing `extracted:` for unmigrated notes so the file
+// stays minimal.
+function extractedHasContent(extracted) {
+  if (!extracted) return false;
+  if (extracted.section_index) return true;
+  if (extracted.methodology_type) return true;
+  if (extracted.sample_size != null) return true;
+  for (const k of ['tech_stack', 'datasets_used', 'frameworks_cited', 'results', 'claims']) {
+    if (Array.isArray(extracted[k]) && extracted[k].length > 0) return true;
+  }
+  for (const k of ['claims_first_in_area', 'challenges_existing', 'baseline_compared',
+                   'releases_code', 'reports_uncertainty']) {
+    if (extracted[k] != null) return true;
+  }
+  const pop = extracted.population || {};
+  if ((pop.language || []).length > 0) return true;
+  if ((pop.geography || []).length > 0) return true;
+  if (pop.system_domain || pop.sample_type || pop.time_period) return true;
+  const qs = extracted.quoted_spans || {};
+  for (const k of Object.keys(qs)) {
+    if (Array.isArray(qs[k]) && qs[k].length > 0) return true;
+  }
+  return false;
 }
 
 function stringifyScalar(v) {
@@ -222,10 +347,11 @@ export async function listEligible() {
     if (exists) {
       const md = await readText(notePath(row.paper_id), '');
       const note = parseNoteMd(md);
-      // Apply the same in-memory backfill getNote() uses, so the sidebar
-      // status reflects what the form would show — a note with derivable
-      // defaults is "valid pending save", not "draft".
-      backfillDerivedDefaults(note, topicTitle);
+      // Same in-memory defaults getNote() uses, so the sidebar status
+      // matches the form. Pulls enriched fields from the triage row so
+      // a paper opened earlier (and enriched then) shows as valid here
+      // without a re-fetch from OpenAlex per paper.
+      applyInMemoryDefaults(note, row, topicTitle);
       const issues = validate(note);
       status = issues.length === 0 ? 'valid' : 'draft';
     }
@@ -262,6 +388,38 @@ async function readTopicTitle() {
   } catch {
     return '';
   }
+}
+
+// Merge identification fields from the triage row into the note's
+// frontmatter when the note's own field is empty. The triage row may
+// have been enriched via OpenAlex on a prior `getNote()` open — pulling
+// from it here means `listEligible()` sees the same validity as the
+// form would, without re-running the network call per paper.
+function mergeRowFieldsIntoNote(note, row) {
+  if (!row) return;
+  const fm = note.frontmatter;
+  if (!String(fm.venue || '').trim() && row.venue) fm.venue = row.venue;
+  if ((!Array.isArray(fm.authors) || fm.authors.length === 0) && row.authors) {
+    fm.authors = parseAuthors(row.authors);
+  }
+  if (!(typeof fm.year === 'number' && fm.year > 0) && row.year) {
+    fm.year = parseInt(row.year, 10) || 0;
+  }
+  if (!String(fm.arxiv_id || '').trim() && row.arxiv_id) fm.arxiv_id = row.arxiv_id;
+  if (!String(fm.url || '').trim() && row.url) fm.url = row.url;
+  if (!String(fm.doi || '').trim() && row.doi) fm.doi = row.doi;
+  // arXiv preprints default to venue 'arXiv' once arxiv_id is present.
+  if (!String(fm.venue || '').trim() && (fm.arxiv_id || /arxiv/i.test(String(row.source_database || '')))) {
+    fm.venue = 'arXiv';
+  }
+}
+
+// All the in-memory defaults that getNote and listEligible should both
+// apply before running validate(). Keeps the form-validity and sidebar-
+// status definitions identical.
+function applyInMemoryDefaults(note, row, topicTitle) {
+  mergeRowFieldsIntoNote(note, row);
+  backfillDerivedDefaults(note, topicTitle);
 }
 
 // Backfill validation-blocking defaults that can be derived deterministically
@@ -340,7 +498,7 @@ export async function getNote(paperId) {
     row = await maybeEnrichRow(row);
     const topicTitle = await readTopicTitle();
     const fresh = emptyNote(row);
-    backfillDerivedDefaults(fresh, topicTitle);
+    applyInMemoryDefaults(fresh, row, topicTitle);
     return {
       note: fresh,
       paper: row,
@@ -350,35 +508,19 @@ export async function getNote(paperId) {
   }
   const md = await readText(notePath(paperId), '');
   const note = parseNoteMd(md);
-  // Enrich identification on existing notes too: if the saved frontmatter
-  // is missing venue/authors/year but the underlying paper has a DOI,
-  // backfill via OpenAlex and offer the values to the form. Persists to
-  // triage CSV; the note file is left for the student to save explicitly.
+  // Enrich the triage row via OpenAlex when the note frontmatter is
+  // missing identification fields and a DOI is available. This persists
+  // to the triage CSV so listEligible (and the CLI) see the canonical
+  // record without re-fetching.
   const fm = note.frontmatter;
   const fmNeeds = !String(fm.venue || '').trim()
     || !Array.isArray(fm.authors) || fm.authors.length === 0
     || !(typeof fm.year === 'number' && fm.year > 0);
   if (fmNeeds && fm.doi) {
     row = await maybeEnrichRow({ ...row, doi: fm.doi });
-    if (!String(fm.venue || '').trim() && row.venue) fm.venue = row.venue;
-    if ((!Array.isArray(fm.authors) || fm.authors.length === 0) && row.authors) {
-      fm.authors = parseAuthors(row.authors);
-    }
-    if (!(typeof fm.year === 'number' && fm.year > 0) && row.year) {
-      fm.year = parseInt(row.year, 10) || 0;
-    }
-    if (!String(fm.arxiv_id || '').trim() && row.arxiv_id) fm.arxiv_id = row.arxiv_id;
-    if (!String(fm.url || '').trim() && row.url) fm.url = row.url;
   }
-  // arXiv preprints with no venue: default to 'arXiv' on read too.
-  if (!String(fm.venue || '').trim() && (fm.arxiv_id || /arxiv/i.test(String(row.source_database || '')))) {
-    fm.venue = 'arXiv';
-  }
-  // Backfill the two validation-blocking defaults (novelty_strength and
-  // relevance body) from signals already in the note. In-memory only —
-  // user saves to persist.
   const topicTitle = await readTopicTitle();
-  backfillDerivedDefaults(note, topicTitle);
+  applyInMemoryDefaults(note, row, topicTitle);
   return {
     note,
     paper: row,
@@ -404,14 +546,12 @@ export async function saveNote(paperId, note) {
 export function validate(note) {
   const errors = [];
   const fm = note.frontmatter;
-  // Venue is informational, not required — a paper is identified by DOI
-  // or arXiv ID, and journal-less preprints have no venue to name.
+  // Identification — the v2 schema keeps the same identification
+  // contract: every paper needs at least one stable identifier.
   const requiredScalars = ['paper_id', 'title', 'pdf_path', 'read_date'];
   for (const k of requiredScalars) {
     if (!fm[k] || String(fm[k]).trim() === '') errors.push(`empty: ${k}`);
   }
-  // At least one canonical identifier is required so citations are
-  // unambiguous. URL alone is accepted for manual additions.
   const hasIdentifier = !!(String(fm.doi || '').trim()
     || String(fm.arxiv_id || '').trim()
     || String(fm.url || '').trim());
@@ -420,25 +560,104 @@ export function validate(note) {
   if (typeof fm.year !== 'number' || fm.year < 1990 || fm.year > 2030) {
     errors.push(`year out of range: ${fm.year}`);
   }
+  // Topic-defined enums (still meaningful; populated by topic_enums
+  // extractor in v2).
   if (!Array.isArray(fm.category) || fm.category.length === 0) errors.push('empty: category');
   if (!fm.method?.family) errors.push('empty: method.family');
-  if (!fm.claims?.novelty_strength) errors.push('empty: claims.novelty_strength');
-  if (!['strong', 'moderate', 'incremental', 'unclear'].includes(fm.claims?.novelty_strength || '')) {
-    errors.push('claims.novelty_strength must be strong/moderate/incremental/unclear');
-  }
+  // Relevance bucket stays — it's deterministically templated from
+  // claim/topic cosine and still required for the catalogue / mode
+  // renderers.
   if (!fm.relevance?.relevance_to_topic) errors.push('empty: relevance.relevance_to_topic');
   if (!['core', 'adjacent', 'peripheral'].includes(fm.relevance?.relevance_to_topic || '')) {
     errors.push('relevance.relevance_to_topic must be core/adjacent/peripheral');
   }
-  // Body checks
-  for (const key of BODY_SECTIONS) {
-    const text = (note.body[key] || '').trim();
-    if (!text || text === '_(not yet written)_') errors.push(`empty body: ${BODY_SECTION_HEADINGS[key]}`);
+
+  // The v1 prose-drafter validation (novelty_strength enum, 400-word
+  // body minimum, six "must-have body sections" check) is gone — those
+  // were artefacts of the prose-drafting contract that no longer exists.
+  // The v2 contract is: identification + topic enums + relevance bucket
+  // + every populated extracted field carries provenance.
+
+  // v2 schema: any populated field under `extracted` must carry a
+  // `provenance` subtree with a `mechanism` field. Phase 1a doesn't yet
+  // produce content here, so this check is dormant until the per-field
+  // extractors ship in Phase 1b — but wiring it now means provenance is
+  // enforced from day one, including for hand-edited YAML.
+  const extracted = fm.extracted;
+  if (extracted && typeof extracted === 'object') {
+    errors.push(...validateExtractedProvenance(extracted));
   }
-  // Word count window for the body
-  const bodyWords = BODY_SECTIONS.reduce((n, k) => n + (note.body[k] || '').split(/\s+/).filter(Boolean).length, 0);
-  if (bodyWords < 400) errors.push(`body too short: ${bodyWords} words (min 400)`);
-  if (bodyWords > 1500) errors.push(`body too long: ${bodyWords} words (max 1500)`);
+  return errors;
+}
+
+function hasProvenance(obj) {
+  if (!obj || typeof obj !== 'object') return false;
+  const p = obj.provenance;
+  return !!(p && typeof p === 'object' && typeof p.mechanism === 'string' && p.mechanism);
+}
+
+// Walk the `extracted:` subtree and flag any populated value missing
+// provenance. Skips empty/null fields — only checks what's been claimed.
+function validateExtractedProvenance(extracted) {
+  const errors = [];
+  // Scalar-with-provenance fields.
+  const scalarKeys = [
+    'methodology_type', 'sample_size',
+    'claims_first_in_area', 'challenges_existing',
+    'baseline_compared', 'releases_code', 'reports_uncertainty',
+  ];
+  for (const k of scalarKeys) {
+    const v = extracted[k];
+    if (v == null) continue;
+    if (typeof v !== 'object' || !('value' in v)) {
+      errors.push(`extracted.${k}: must be { value, provenance } when populated`);
+    } else if (!hasProvenance(v)) {
+      errors.push(`extracted.${k}: missing provenance`);
+    }
+  }
+  // Array-of-records fields.
+  const arrayKeys = ['tech_stack', 'datasets_used', 'frameworks_cited', 'results', 'claims'];
+  for (const k of arrayKeys) {
+    const arr = extracted[k];
+    if (!Array.isArray(arr) || arr.length === 0) continue;
+    for (let i = 0; i < arr.length; i++) {
+      if (!hasProvenance(arr[i])) {
+        errors.push(`extracted.${k}[${i}]: missing provenance`);
+      }
+    }
+  }
+  // population.{language,geography} are arrays of { value, provenance }.
+  const pop = extracted.population || {};
+  for (const k of ['language', 'geography']) {
+    const arr = pop[k];
+    if (!Array.isArray(arr) || arr.length === 0) continue;
+    for (let i = 0; i < arr.length; i++) {
+      if (!hasProvenance(arr[i])) {
+        errors.push(`extracted.population.${k}[${i}]: missing provenance`);
+      }
+    }
+  }
+  // population scalars.
+  for (const k of ['system_domain', 'sample_type', 'time_period']) {
+    const v = pop[k];
+    if (v == null) continue;
+    if (typeof v !== 'object' || !('value' in v)) {
+      errors.push(`extracted.population.${k}: must be { value, provenance } when populated`);
+    } else if (!hasProvenance(v)) {
+      errors.push(`extracted.population.${k}: missing provenance`);
+    }
+  }
+  // quoted_spans: each populated span must carry provenance.
+  const qs = extracted.quoted_spans || {};
+  for (const section of Object.keys(qs)) {
+    const arr = qs[section];
+    if (!Array.isArray(arr) || arr.length === 0) continue;
+    for (let i = 0; i < arr.length; i++) {
+      if (!hasProvenance(arr[i])) {
+        errors.push(`extracted.quoted_spans.${section}[${i}]: missing provenance`);
+      }
+    }
+  }
   return errors;
 }
 

@@ -16,6 +16,7 @@ import { DATA_FILES, PROTOCOL_FILES } from '../paths.mjs';
 import { ensureDir, readText, fileExists } from '../storage.mjs';
 import { writeCsv, parseCsv } from './csv.mjs';
 import { parseTopic } from './topic_md.mjs';
+import { csvLock } from './triage.mjs';
 import {
   resolveToOpenalexId,
   fetchBackwardCitations,
@@ -100,27 +101,34 @@ async function loadTriagedRows() {
 
 async function appendCandidates(newRows) {
   if (newRows.length === 0) return 0;
-  const existing = await loadTriagedRows();
-  // Snowballed rows go in as pending (empty triage_label). paper_id stays
-  // empty until the student decides them — keeps id assignment stable.
-  const merged = existing.concat(newRows.map((r) => ({
-    paper_id: '',
-    title: r.title || '',
-    authors: r.authors || '',
-    year: r.year || '',
-    venue: r.venue || '',
-    abstract: r.abstract || '',
-    doi: r.doi || '',
-    arxiv_id: r.arxiv_id || '',
-    url: r.url || '',
-    pdf_url: r.pdf_url || '',
-    source_database: r.source_database || 'openalex',
-    source_query: r.source_query || 'snowball',
-    triage_label: '',
-    triage_reason: '',
-  })));
-  await fs.writeFile(DATA_FILES.candidates_triaged, writeCsv(merged, TRIAGED_FIELDS), 'utf8');
-  return newRows.length;
+  // Go through triage's csvLock so this append doesn't race with a
+  // setDecision from the active-learning trainer. Both paths
+  // read-modify-write the same CSV; without the shared lock, the loser
+  // truncates the winner's changes and row_indexes go out of range.
+  return csvLock(async () => {
+    const existing = await loadTriagedRows();
+    // Snowballed rows go in as pending (empty triage_label). paper_id
+    // stays empty until the student decides them, keeping id assignment
+    // stable.
+    const merged = existing.concat(newRows.map((r) => ({
+      paper_id: '',
+      title: r.title || '',
+      authors: r.authors || '',
+      year: r.year || '',
+      venue: r.venue || '',
+      abstract: r.abstract || '',
+      doi: r.doi || '',
+      arxiv_id: r.arxiv_id || '',
+      url: r.url || '',
+      pdf_url: r.pdf_url || '',
+      source_database: r.source_database || 'openalex',
+      source_query: r.source_query || 'snowball',
+      triage_label: '',
+      triage_reason: '',
+    })));
+    await fs.writeFile(DATA_FILES.candidates_triaged, writeCsv(merged, TRIAGED_FIELDS), 'utf8');
+    return newRows.length;
+  });
 }
 
 // ---------------------------------------------------------------------------

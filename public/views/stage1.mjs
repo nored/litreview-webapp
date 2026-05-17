@@ -337,7 +337,7 @@ export async function renderStage1(root) {
 
   function renderSummary(doneEvent) {
     summaryEl.innerHTML = '';
-    summaryEl.appendChild(h('div', { class: 'card' }, [
+    const card = h('div', { class: 'card stage1-result-card' }, [
       h('h3', {}, ['Result']),
       h('div', { class: 'summary-stats' }, [
         stat('Total candidates after dedup', doneEvent.total),
@@ -348,10 +348,21 @@ export async function renderStage1(root) {
       ]),
       h('p', { class: 'small muted' }, [
         'Saved to ', h('code', {}, ['data/candidates_raw.csv']),
-        '. Review and proceed to ',
-        h('a', { href: '#/stage2' }, ['stage 2 triage']), '.',
+        '. Near-duplicate scan will auto-fire once the embed daemon indexes the new papers.',
       ]),
-    ]));
+      h('div', { class: 'summary-cta' }, [
+        h('a', {
+          class: 'btn btn-primary btn-xl btn-rainbow-pulse', href: '#/stage2',
+        }, ['→ Move to triage']),
+      ]),
+    ]);
+    summaryEl.appendChild(card);
+    // Bring the CTA into view — the user is at the bottom of the page
+    // watching the progress stream, so the button needs to be visible
+    // without scrolling.
+    requestAnimationFrame(() => {
+      card.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    });
   }
 
   function stat(label, value, kind) {
@@ -502,7 +513,10 @@ export async function renderStage1(root) {
     }
 
     if (job.status === 'completed') {
-      const reRun = h('button', { class: 'btn', type: 'button' }, ['Re-run from scratch']);
+      // Keep the top banner small — the CTA lives at the bottom of the
+      // page where the user is already scrolled after watching the
+      // progress stream. Top banner just confirms state + offers re-run.
+      const reRun = h('button', { class: 'btn btn-ghost', type: 'button' }, ['Re-run from scratch']);
       reRun.addEventListener('click', () => {
         if (!confirm('Re-running discards the existing candidates_raw.csv. Proceed?')) return;
         startSearch('fresh');
@@ -513,10 +527,26 @@ export async function renderStage1(root) {
           ' ', formatRelative(new Date(job.finished_at || job.started_at).getTime()), '. ',
           `${job.final_candidate_count} candidates in `,
           h('code', {}, ['data/candidates_raw.csv']),
-          '.',
+          '. Ready to triage (button below).',
         ]),
         h('div', { class: 'banner-actions' }, [reRun]),
       ]));
+      // Bottom CTA on page reload too. If renderSummary already ran in
+      // this session (live SSE done event), don't overwrite it.
+      if (!summaryEl.querySelector('.stage1-result-card')) {
+        summaryEl.innerHTML = '';
+        summaryEl.appendChild(h('div', { class: 'card stage1-result-card' }, [
+          h('h3', {}, ['Ready to triage']),
+          h('p', { class: 'small muted' }, [
+            `${job.final_candidate_count} candidates in `, h('code', {}, ['data/candidates_raw.csv']), '.',
+          ]),
+          h('div', { class: 'summary-cta' }, [
+            h('a', {
+              class: 'btn btn-primary btn-xl btn-rainbow-pulse', href: '#/stage2',
+            }, ['→ Move to triage']),
+          ]),
+        ]));
+      }
       return;
     }
   }
@@ -616,128 +646,11 @@ Example of unacceptable: machine-learning-code-review`;
     summaryEl,
   ]));
 
-  // Semantic near-duplicate detection over candidates_raw.csv via the
-  // papers vector store. Surfaces preprint-vs-published collisions and
-  // multi-source duplicates the title/DOI dedup misses. Marking one as
-  // exclude (rather than deleting) keeps row_index references stable.
-  const dedupPanel = renderDedupPanel();
-  root.appendChild(dedupPanel);
-
   renderQueries();
   renderManual();
   refreshBanner();
 }
 
-function renderDedupPanel() {
-  const listEl = h('div', { class: 'dedup-list' });
-  const status = h('span', { class: 'muted small' }, ['']);
-  let scanning = false;
-  let pairs = [];
-
-  async function scan() {
-    if (scanning) return;
-    scanning = true;
-    render();
-    try {
-      const r = await fetch('/api/search/near-duplicates?threshold=0.92').then((res) => res.json());
-      if (r.error) throw new Error(r.error);
-      pairs = r.pairs || [];
-      status.className = 'muted small';
-      status.textContent = pairs.length === 0
-        ? 'No near-duplicate pairs above 0.92. Either your dedup is clean or the search hasn’t produced enough overlap to find them.'
-        : `${pairs.length} candidate pair${pairs.length === 1 ? '' : 's'} (cosine ≥ 0.92).`;
-    } catch (err) {
-      status.className = 'hint hint-warn small';
-      status.textContent = 'scan failed: ' + err.message;
-    } finally {
-      scanning = false;
-      render();
-    }
-  }
-
-  async function resolve(keep, drop) {
-    try {
-      const r = await fetch('/api/search/resolve-duplicate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ keep_row_index: keep, drop_row_index: drop }),
-      }).then((res) => res.json());
-      if (r.error) throw new Error(r.error);
-      // Drop the resolved pair from local state and re-render.
-      pairs = pairs.filter((p) => !(
-        (p.a.row_index === keep && p.b.row_index === drop) ||
-        (p.a.row_index === drop && p.b.row_index === keep)
-      ));
-      render();
-    } catch (err) {
-      alert('Resolve failed: ' + err.message);
-    }
-  }
-
-  function paperLabel(p) {
-    const bits = [p.title || '(untitled)'];
-    if (p.year) bits.push(`(${p.year})`);
-    if (p.venue) bits.push(`· ${p.venue.slice(0, 40)}`);
-    return bits.join(' ');
-  }
-
-  function render() {
-    listEl.innerHTML = '';
-    if (scanning) {
-      listEl.appendChild(h('p', { class: 'muted small' }, ['scanning the papers store…']));
-      return;
-    }
-    if (!pairs.length) return;
-    for (const p of pairs) {
-      const row = h('div', { class: 'dedup-row card' }, [
-        h('div', { class: 'dedup-score muted small' }, [`cosine ${p.score.toFixed(3)}`]),
-        h('div', { class: 'dedup-pair' }, [
-          h('div', { class: 'dedup-cell' }, [
-            h('div', { class: 'dedup-title' }, [paperLabel(p.a)]),
-            p.a.doi ? h('div', { class: 'muted small mono' }, [p.a.doi]) : null,
-            h('div', { class: 'dedup-meta muted small' }, [
-              `row ${p.a.row_index}`,
-              p.a.triage_label ? ` · ${p.a.triage_label}` : ' · pending',
-            ]),
-            h('button', {
-              class: 'btn btn-ghost btn-sm', type: 'button',
-              onclick: () => resolve(p.a.row_index, p.b.row_index),
-            }, ['Keep this, drop the other']),
-          ]),
-          h('div', { class: 'dedup-cell' }, [
-            h('div', { class: 'dedup-title' }, [paperLabel(p.b)]),
-            p.b.doi ? h('div', { class: 'muted small mono' }, [p.b.doi]) : null,
-            h('div', { class: 'dedup-meta muted small' }, [
-              `row ${p.b.row_index}`,
-              p.b.triage_label ? ` · ${p.b.triage_label}` : ' · pending',
-            ]),
-            h('button', {
-              class: 'btn btn-ghost btn-sm', type: 'button',
-              onclick: () => resolve(p.b.row_index, p.a.row_index),
-            }, ['Keep this, drop the other']),
-          ]),
-        ]),
-      ]);
-      listEl.appendChild(row);
-    }
-  }
-
-  const scanBtn = h('button', { class: 'btn', type: 'button' }, ['Find near-duplicates']);
-  scanBtn.addEventListener('click', () => scan());
-
-  return h('section', { class: 'panel' }, [
-    h('div', { class: 'panel-header' }, [
-      h('h2', {}, ['Near-duplicates']),
-      h('div', { class: 'panel-actions' }, [scanBtn, status]),
-    ]),
-    h('p', { class: 'small muted' }, [
-      'Embedding-based scan over the papers store. Surfaces preprint-vs-published collisions and multi-source duplicates that title/DOI dedup misses. Resolving marks one row as ',
-      h('em', {}, ['exclude']),
-      ' with reason "near-duplicate of row N" — paper_id assignments stay stable.',
-    ]),
-    listEl,
-  ]);
-}
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({

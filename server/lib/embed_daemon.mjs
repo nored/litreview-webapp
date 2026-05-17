@@ -126,8 +126,17 @@ function itemKey(kind, id) {
 // ---------------------------------------------------------------------------
 
 async function collectPaperItems() {
-  if (!await fileExists(DATA_FILES.candidates_triaged)) return [];
-  const text = await readText(DATA_FILES.candidates_triaged, '');
+  // Prefer the triaged CSV. Right after a fresh search only the raw CSV
+  // exists (the triaged version is materialised on first triage edit) —
+  // we still want to embed those papers so triage's classifier is
+  // ready when the user gets there.
+  let text = null;
+  if (await fileExists(DATA_FILES.candidates_triaged)) {
+    text = await readText(DATA_FILES.candidates_triaged, '');
+  } else if (await fileExists(DATA_FILES.candidates_raw)) {
+    text = await readText(DATA_FILES.candidates_raw, '');
+  }
+  if (!text) return [];
   const { rows } = parseCsv(text);
   const items = [];
   // We use row_index (0-based CSV row) as the stable id rather than

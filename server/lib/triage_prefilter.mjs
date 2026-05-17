@@ -27,6 +27,7 @@ import { DATA_DIR } from '../paths.mjs';
 import { ensureDir } from '../storage.mjs';
 import * as vectors from './vectors.mjs';
 import * as triage from './triage.mjs';
+import * as downloadDaemon from './download_daemon.mjs';
 import {
   makeMatrix, normalize, communityDetection, autoTuneCommunityParams,
 } from './sbert_utils.mjs';
@@ -538,35 +539,28 @@ export async function describeCommunities() {
 // download daemon enqueue, embed daemon resync) fire normally.
 export async function applyDecisions(decisions, opts = {}) {
   const { reasonPrefix = 'auto-triage (embedding pre-filter)' } = opts;
-  const papers = await triage.getAll();
-  const byIndex = new Map(papers.map((p) => [p.row_index, p]));
-  let applied = 0;
-  let skipped = 0;
-  const errors = [];
-  for (const d of decisions) {
-    const idx = Number(d.row_index);
-    const row = byIndex.get(idx);
-    if (!row) {
-      errors.push({ row_index: idx, error: 'row not found in triage' });
-      continue;
+  // Build the batch list: each entry is { row_index, label, reason }.
+  // Validation (unsupported labels) happens inside setDecisionsBatch.
+  const batch = decisions.map((d) => ({
+    row_index: d.row_index,
+    label: d.decision,
+    reason: `${reasonPrefix} — inc ${(d.include_score ?? 0).toFixed(3)} / exc ${(d.exclude_score ?? 0).toFixed(3)} / margin ${(d.margin ?? 0).toFixed(3)}`,
+  }));
+  const res = await triage.setDecisionsBatch(batch);
+  // Enqueue every newly-labelled include/maybe paper for download in
+  // one pass. Reads the CSV once (post-batch) and finds all rows; no
+  // per-paper getAll().
+  try {
+    if (res.paper_ids?.length) {
+      const all = await triage.getAll();
+      const byPaperId = new Map(all.map((r) => [r.paper_id, r]));
+      for (const pid of res.paper_ids) {
+        const row = byPaperId.get(pid);
+        if (row) downloadDaemon.enqueue(row);
+      }
     }
-    if (row.triage_label && row.triage_label !== '') {
-      skipped++;
-      continue;
-    }
-    if (d.decision !== 'include' && d.decision !== 'exclude' && d.decision !== 'maybe') {
-      errors.push({ row_index: idx, error: `unsupported decision: ${d.decision}` });
-      continue;
-    }
-    const reason = `${reasonPrefix} — inc ${(d.include_score ?? 0).toFixed(3)} / exc ${(d.exclude_score ?? 0).toFixed(3)} / margin ${(d.margin ?? 0).toFixed(3)}`;
-    try {
-      await triage.setDecision({ row_index: idx, label: d.decision, reason });
-      applied++;
-    } catch (err) {
-      errors.push({ row_index: idx, error: err.message });
-    }
-  }
-  return { applied, skipped, errors };
+  } catch { /* enqueue is best-effort */ }
+  return res;
 }
 
 // Convenience: preview with current thresholds, then apply everything
